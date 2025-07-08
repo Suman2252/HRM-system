@@ -71,7 +71,7 @@ const EditEmployee = () => {
     try {
       setLoading(true);
       const token = localStorage.getItem('token');
-      const response = await fetch(`/api/employees/${id}`, {
+      const response = await fetch(`http://localhost:5001/api/employees/${id}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -113,7 +113,7 @@ const EditEmployee = () => {
           phone: employeeData.emergencyContact?.phone || ''
         },
         status: employeeData.status || 'active',
-        employeeId: employeeData.employeeId || ''
+        employeeId: employeeData.employeeCode || employeeData.employeeId || ''
       });
     } catch (error) {
       console.error('Error fetching employee:', error);
@@ -220,7 +220,7 @@ const EditEmployee = () => {
         profileImage: profileImage
       };
 
-      const response = await fetch(`/api/employees/${id}`, {
+      const response = await fetch(`http://localhost:5001/api/employees/${id}`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,

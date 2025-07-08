@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useFormik } from 'formik';
 import * as Yup from 'yup';
+import axios from 'axios';
 import { 
   User, 
   Mail, 
@@ -15,7 +16,8 @@ import {
   Save,
   Lock,
   Eye,
-  EyeOff
+  EyeOff,
+  Hash
 } from 'lucide-react';
 import Button from '../../components/common/Button';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
@@ -29,6 +31,7 @@ const AddEmployee = () => {
   const [imagePreview, setImagePreview] = useState(null);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [loadingEmployeeId, setLoadingEmployeeId] = useState(false);
 
   // Validation schema
   const validationSchema = Yup.object({
@@ -146,6 +149,40 @@ const AddEmployee = () => {
       }
     }
   });
+
+  // Function to fetch next available Employee ID
+  const fetchNextEmployeeId = async (role) => {
+    try {
+      setLoadingEmployeeId(true);
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`http://localhost:5001/api/employees/next-id/${role}`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+      
+      if (response.data.employeeCode) {
+        formik.setFieldValue('employeeId', response.data.employeeCode);
+      }
+    } catch (error) {
+      console.error('Error fetching employee ID:', error);
+      toast.error('Failed to generate Employee ID. Please try again.');
+    } finally {
+      setLoadingEmployeeId(false);
+    }
+  };
+
+  // Fetch Employee ID when role changes
+  useEffect(() => {
+    if (formik.values.role) {
+      fetchNextEmployeeId(formik.values.role);
+    }
+  }, [formik.values.role]);
+
+  // Fetch initial Employee ID on component mount
+  useEffect(() => {
+    fetchNextEmployeeId('employee'); // Default role
+  }, []);
 
   // Handle image upload
   const handleImageChange = (event) => {
@@ -503,19 +540,31 @@ const AddEmployee = () => {
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Employee ID *
               </label>
-              <input
-                type="text"
-                {...formik.getFieldProps('employeeId')}
-                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-100 ${
-                  formik.touched.employeeId && formik.errors.employeeId
-                    ? 'border-red-500'
-                    : 'border-gray-300'
-                }`}
-                placeholder="e.g., EMP001"
-              />
+              <div className="relative">
+                <Hash className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <input
+                  type="text"
+                  value={formik.values.employeeId}
+                  readOnly
+                  className={`pl-10 pr-10 w-full px-3 py-2 border rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-300 cursor-not-allowed ${
+                    formik.touched.employeeId && formik.errors.employeeId
+                      ? 'border-red-500'
+                      : 'border-gray-300 dark:border-gray-600'
+                  }`}
+                  placeholder="Auto-generated based on role"
+                />
+                {loadingEmployeeId && (
+                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                    <LoadingSpinner size="small" />
+                  </div>
+                )}
+              </div>
               {formik.touched.employeeId && formik.errors.employeeId && (
                 <p className="mt-1 text-sm text-red-600">{formik.errors.employeeId}</p>
               )}
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                Employee ID is automatically generated based on the selected role
+              </p>
             </div>
 
             <div>

@@ -1,5 +1,6 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Navigate } from 'react-router-dom';
 import PrivateRoute from './PrivateRoute';
+import Layout from '../components/layout/Layout';
 
 // Auth Pages
 import Login from '../pages/auth/Login';
@@ -43,6 +44,9 @@ import Settings from '../pages/profile/Settings';
 // Reports
 import Reports from '../pages/reports/Reports';
 
+// Analytics Pages
+import EmployeeAnalytics from '../pages/analytics/EmployeeAnalytics';
+
 // Management Pages
 import Complaints from '../pages/management/Complaints';
 import OfficeCircular from '../pages/management/OfficeCircular';
@@ -50,210 +54,244 @@ import OfficeCircular from '../pages/management/OfficeCircular';
 // Error Pages
 import NotFound from '../pages/error/NotFound';
 
-const AppRoutes = () => {
-  return (
-    <Routes>
-      {/* Public Routes */}
-      <Route path="/login" element={<Login />} />
-      <Route path="/register" element={<Register />} />
-      <Route path="/admin/register" element={<AdminRegister />} />
-      <Route path="/forgot-password" element={<ForgotPassword />} />
-      <Route path="/reset-password" element={<ResetPassword />} />
-      <Route path="/change-password" element={<ChangePassword />} />
+export const routes = [
+  // Public Routes (no layout)
+  {
+    path: "/login",
+    element: <Login />
+  },
+  {
+    path: "/register",
+    element: <Register />
+  },
+  {
+    path: "/admin/register",
+    element: <AdminRegister />
+  },
+  {
+    path: "/forgot-password",
+    element: <ForgotPassword />
+  },
+  {
+    path: "/reset-password",
+    element: <ResetPassword />
+  },
+  {
+    path: "/change-password",
+    element: <ChangePassword />
+  },
+  
+  // Private Routes (with layout)
+  {
+    path: "/",
+    element: <Layout />,
+    children: [
+      {
+        index: true,
+        element: <Navigate to="/dashboard" replace />
+      },
       
-      {/* Private Routes */}
-      <Route path="/" element={<Navigate to="/dashboard" replace />} />
-      
-      {/* Dashboard */}
-      <Route 
-        path="/dashboard" 
-        element={
+      // Dashboard
+      {
+        path: "dashboard",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager', 'employee']}>
             <Dashboard />
           </PrivateRoute>
-        } 
-      />
+        )
+      },
 
-      {/* Employee Management */}
-      <Route 
-        path="/employees" 
-        element={
+      // Employee Management
+      {
+        path: "employees",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager']}>
             <EmployeeList />
           </PrivateRoute>
-        } 
-      />
-      <Route 
-        path="/employees/add" 
-        element={
+        )
+      },
+      {
+        path: "employees/add",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager']}>
             <AddEmployee />
           </PrivateRoute>
-        } 
-      />
-      <Route 
-        path="/employees/edit/:id" 
-        element={
+        )
+      },
+      {
+        path: "employees/edit/:id",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager']}>
             <EditEmployee />
           </PrivateRoute>
-        } 
-      />
-      <Route 
-        path="/employees/:id" 
-        element={
+        )
+      },
+      {
+        path: "employees/:id",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager']}>
             <EmployeeDetails />
           </PrivateRoute>
-        } 
-      />
+        )
+      },
 
-      {/* Attendance Management */}
-      <Route 
-        path="/attendance" 
-        element={
+      // Attendance Management
+      {
+        path: "attendance",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'employee']}>
             <AttendanceManagement />
           </PrivateRoute>
-        } 
-      />
-      <Route 
-        path="/attendance/report" 
-        element={
+        )
+      },
+      {
+        path: "attendance/report",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager']}>
             <AttendanceReport />
           </PrivateRoute>
-        } 
-      />
+        )
+      },
 
-      {/* Request History */}
-      <Route 
-        path="/request-history" 
-        element={
+      // Request History
+      {
+        path: "request-history",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager', 'employee']}>
             <RequestHistory />
           </PrivateRoute>
-        } 
-      />
+        )
+      },
 
-      {/* Leave Management */}
-      <Route 
-        path="/leave" 
-        element={
+      // Leave Management
+      {
+        path: "leave",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager', 'employee']}>
             <LeaveManagement />
           </PrivateRoute>
-        } 
-      />
-      <Route 
-        path="/leave/requests" 
-        element={
+        )
+      },
+      {
+        path: "leave/requests",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager']}>
             <LeaveRequests />
           </PrivateRoute>
-        } 
-      />
-      <Route 
-        path="/leave/calendar" 
-        element={
+        )
+      },
+      {
+        path: "leave/calendar",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager', 'employee']}>
             <LeaveCalendar />
           </PrivateRoute>
-        } 
-      />
-      <Route 
-        path="/onduty" 
-        element={
+        )
+      },
+      {
+        path: "onduty",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager', 'employee']}>
             <OnDuty />
           </PrivateRoute>
-        } 
-      />
+        )
+      },
 
-      {/* Payroll Management */}
-      <Route 
-        path="/payroll" 
-        element={
+      // Payroll Management
+      {
+        path: "payroll",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager']}>
             <PayrollManagement />
           </PrivateRoute>
-        } 
-      />
-      <Route 
-        path="/payroll/generate" 
-        element={
+        )
+      },
+      {
+        path: "payroll/generate",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager']}>
             <PayrollGeneration />
           </PrivateRoute>
-        } 
-      />
-      <Route 
-        path="/payroll/history" 
-        element={
+        )
+      },
+      {
+        path: "payroll/history",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager']}>
             <PayrollHistory />
           </PrivateRoute>
-        } 
-      />
+        )
+      },
 
-      {/* Reports */}
-      <Route 
-        path="/reports" 
-        element={
+      // Reports
+      {
+        path: "reports",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager']}>
             <Reports />
           </PrivateRoute>
-        } 
-      />
+        )
+      },
 
-      {/* Management */}
-      <Route 
-        path="/complaints" 
-        element={
+      // Analytics
+      {
+        path: "analytics/employee",
+        element: (
+          <PrivateRoute allowedRoles={['admin', 'hr_manager']}>
+            <EmployeeAnalytics />
+          </PrivateRoute>
+        )
+      },
+
+      // Management
+      {
+        path: "complaints",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager', 'employee']}>
             <Complaints />
           </PrivateRoute>
-        } 
-      />
-      <Route 
-        path="/office-circular" 
-        element={
+        )
+      },
+      {
+        path: "office-circular",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager', 'employee']}>
             <OfficeCircular />
           </PrivateRoute>
-        } 
-      />
+        )
+      },
 
-      {/* Profile & Settings */}
-      <Route 
-        path="/profile" 
-        element={
+      // Profile & Settings
+      {
+        path: "profile",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager', 'employee']}>
             <ProfileRouter />
           </PrivateRoute>
-        } 
-      />
-      <Route 
-        path="/profile/edit" 
-        element={
+        )
+      },
+      {
+        path: "profile/edit",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr_manager']}>
             <AdminProfile />
           </PrivateRoute>
-        } 
-      />
-      <Route 
-        path="/settings" 
-        element={
+        )
+      },
+      {
+        path: "settings",
+        element: (
           <PrivateRoute allowedRoles={['admin', 'hr', 'hr_manager', 'employee']}>
             <Settings />
           </PrivateRoute>
-        } 
-      />
+        )
+      }
+    ]
+  },
 
-      {/* 404 Not Found */}
-      <Route path="*" element={<NotFound />} />
-    </Routes>
-  );
-};
-
-export default AppRoutes;
+  // 404 Not Found
+  {
+    path: "*",
+    element: <NotFound />
+  }
+];

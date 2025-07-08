@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   Clock, 
   Calendar, 
@@ -16,13 +16,22 @@ import {
   ChevronRight
 } from 'lucide-react';
 import Button from '../../components/common/Button';
+import { useAuth } from '../../context/AuthContext';
+import axios from 'axios';
+import toast from 'react-hot-toast';
 
 const AttendanceManagement = () => {
+  const { user } = useAuth();
   const [currentDate] = useState(new Date());
-  const [selectedYear, setSelectedYear] = useState('2025');
-  const [selectedMonth, setSelectedMonth] = useState('January');
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
+  const [selectedMonth, setSelectedMonth] = useState(new Date().toLocaleString('default', { month: 'long' }));
   const [entriesPerPage, setEntriesPerPage] = useState('10');
   const [searchTerm, setSearchTerm] = useState('');
+  const [attendanceData, setAttendanceData] = useState([]);
+  const [attendanceSummary, setAttendanceSummary] = useState({});
+  const [todayAttendance, setTodayAttendance] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const formatDate = (date) => {
     return date.toLocaleDateString('en-US', { 
@@ -41,6 +50,141 @@ const AttendanceManagement = () => {
     });
   };
 
+  const monthNames = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+
+  // Fetch attendance data
+  const fetchAttendanceData = async () => {
+    try {
+      setLoading(true);
+      
+      // Calculate date range for selected month/year
+      const monthIndex = monthNames.indexOf(selectedMonth);
+      const startDate = new Date(parseInt(selectedYear), monthIndex, 1);
+      const endDate = new Date(parseInt(selectedYear), monthIndex + 1, 0);
+      
+      const response = await axios.get('/api/attendance', {
+        params: {
+          startDate: startDate.toISOString().split('T')[0],
+          endDate: endDate.toISOString().split('T')[0]
+        }
+      });
+      
+      if (response.data) {
+        setAttendanceData(response.data.data || []);
+        setAttendanceSummary(response.data.summary || {});
+      }
+    } catch (error) {
+      console.error('Error fetching attendance data:', error);
+      toast.error('Failed to fetch attendance data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch today's attendance status
+  const fetchTodayAttendance = async () => {
+    try {
+      const response = await axios.get('/api/attendance/today');
+      if (response.data) {
+        setTodayAttendance(response.data.data);
+      }
+    } catch (error) {
+      console.error('Error fetching today\'s attendance:', error);
+    }
+  };
+
+  useEffect(() => {
+    fetchAttendanceData();
+    fetchTodayAttendance();
+  }, [selectedYear, selectedMonth]);
+
+  // Filter attendance data based on search term
+  const filteredData = attendanceData.filter(record => 
+    record.date.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    record.status.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (record.notes && record.notes.toLowerCase().includes(searchTerm.toLowerCase()))
+  );
+
+  // Pagination
+  const totalEntries = filteredData.length;
+  const entriesPerPageNum = parseInt(entriesPerPage);
+  const totalPages = Math.ceil(totalEntries / entriesPerPageNum);
+  const startIndex = (currentPage - 1) * entriesPerPageNum;
+  const endIndex = startIndex + entriesPerPageNum;
+  const currentEntries = filteredData.slice(startIndex, endIndex);
+
+  const getStatusBadge = (status, isLateCheckIn, isEarlyCheckOut) => {
+    let bgColor = 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
+    let icon = <AlertCircle className="w-3 h-3 mr-1" />;
+    
+    switch (status) {
+      case 'present':
+        bgColor = 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
+        icon = <CheckCircle className="w-3 h-3 mr-1" />;
+        break;
+      case 'late':
+        bgColor = 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200';
+        icon = <Clock className="w-3 h-3 mr-1" />;
+        break;
+      case 'half_day':
+        bgColor = 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200';
+        icon = <TrendingDown className="w-3 h-3 mr-1" />;
+        break;
+      case 'absent':
+        bgColor = 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
+        icon = <AlertCircle className="w-3 h-3 mr-1" />;
+        break;
+    }
+    
+    return (
+      <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${bgColor}`}>
+        {icon}
+        {status.charAt(0).toUpperCase() + status.slice(1).replace('_', ' ')}
+        {isLateCheckIn && ' (Late)'}
+        {isEarlyCheckOut && ' (Early)'}
+      </span>
+    );
+  };
+
+  const formatTime = (timeString) => {
+    if (!timeString) return '--';
+    try {
+      const time = new Date(`1970-01-01T${timeString}`);
+      return time.toLocaleTimeString('en-US', { 
+        hour: '2-digit', 
+        minute: '2-digit',
+        hour12: true 
+      });
+    } catch {
+      return timeString;
+    }
+  };
+
+  const getDayName = (dateString) => {
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleDateString('en-US', { weekday: 'long' });
+    } catch {
+      return '--';
+    }
+  };
+
+  const formatDateDisplay = (dateString) => {
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleDateString('en-US', { 
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
+      });
+    } catch {
+      return dateString;
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 p-4 md:p-6">
       {/* Header */}
@@ -56,7 +200,12 @@ const AttendanceManagement = () => {
               <div className="bg-white/20 backdrop-blur-sm rounded-2xl p-4">
                 <Clock className="w-8 h-8 mb-2" />
                 <div className="text-sm text-blue-100">Today's Status</div>
-                <div className="text-xl font-bold">Present</div>
+                <div className="text-xl font-bold">
+                  {todayAttendance?.hasCheckedIn ? 
+                    (todayAttendance?.hasCheckedOut ? 'Completed' : 'Present') : 
+                    'Not Checked In'
+                  }
+                </div>
               </div>
             </div>
           </div>
@@ -70,8 +219,10 @@ const AttendanceManagement = () => {
             <Clock className="w-5 h-5 text-blue-500" />
             <span className="w-2 h-2 bg-green-400 rounded-full"></span>
           </div>
-          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Actual Hours</div>
-          <div className="text-lg font-bold text-gray-900 dark:text-white">08:00</div>
+          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Total Days</div>
+          <div className="text-lg font-bold text-gray-900 dark:text-white">
+            {attendanceSummary.totalDays || 0}
+          </div>
         </div>
 
         <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 hover:shadow-xl transition-all duration-300">
@@ -79,8 +230,10 @@ const AttendanceManagement = () => {
             <TrendingUp className="w-5 h-5 text-green-500" />
             <span className="w-2 h-2 bg-green-400 rounded-full"></span>
           </div>
-          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Worked Hours</div>
-          <div className="text-lg font-bold text-gray-900 dark:text-white">07:45</div>
+          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Present Days</div>
+          <div className="text-lg font-bold text-gray-900 dark:text-white">
+            {attendanceSummary.presentDays || 0}
+          </div>
         </div>
 
         <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 hover:shadow-xl transition-all duration-300">
@@ -88,8 +241,10 @@ const AttendanceManagement = () => {
             <TrendingDown className="w-5 h-5 text-orange-500" />
             <span className="w-2 h-2 bg-orange-400 rounded-full"></span>
           </div>
-          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Shortage</div>
-          <div className="text-lg font-bold text-gray-900 dark:text-white">00:15</div>
+          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Late Days</div>
+          <div className="text-lg font-bold text-gray-900 dark:text-white">
+            {attendanceSummary.lateDays || 0}
+          </div>
         </div>
 
         <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 hover:shadow-xl transition-all duration-300">
@@ -97,8 +252,10 @@ const AttendanceManagement = () => {
             <Award className="w-5 h-5 text-purple-500" />
             <span className="w-2 h-2 bg-blue-400 rounded-full"></span>
           </div>
-          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Excess Hours</div>
-          <div className="text-lg font-bold text-gray-900 dark:text-white">00:00</div>
+          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Half Days</div>
+          <div className="text-lg font-bold text-gray-900 dark:text-white">
+            {attendanceSummary.halfDays || 0}
+          </div>
         </div>
 
         <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 hover:shadow-xl transition-all duration-300">
@@ -106,8 +263,10 @@ const AttendanceManagement = () => {
             <Users className="w-5 h-5 text-indigo-500" />
             <span className="w-2 h-2 bg-indigo-400 rounded-full"></span>
           </div>
-          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">PR</div>
-          <div className="text-lg font-bold text-gray-900 dark:text-white">2</div>
+          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Absent Days</div>
+          <div className="text-lg font-bold text-gray-900 dark:text-white">
+            {attendanceSummary.absentDays || 0}
+          </div>
         </div>
 
         <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 hover:shadow-xl transition-all duration-300">
@@ -115,8 +274,10 @@ const AttendanceManagement = () => {
             <Calendar className="w-5 h-5 text-teal-500" />
             <span className="w-2 h-2 bg-teal-400 rounded-full"></span>
           </div>
-          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">RS</div>
-          <div className="text-lg font-bold text-gray-900 dark:text-white">1</div>
+          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Working Hours</div>
+          <div className="text-lg font-bold text-gray-900 dark:text-white">
+            {attendanceSummary.totalWorkingHours || '0.00'}
+          </div>
         </div>
 
         <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 hover:shadow-xl transition-all duration-300">
@@ -124,8 +285,10 @@ const AttendanceManagement = () => {
             <Target className="w-5 h-5 text-cyan-500" />
             <span className="w-2 h-2 bg-cyan-400 rounded-full"></span>
           </div>
-          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">WO</div>
-          <div className="text-lg font-bold text-gray-900 dark:text-white">4</div>
+          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Overtime Hours</div>
+          <div className="text-lg font-bold text-gray-900 dark:text-white">
+            {attendanceSummary.totalOvertimeHours || '0.00'}
+          </div>
         </div>
 
         <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 hover:shadow-xl transition-all duration-300">
@@ -133,8 +296,11 @@ const AttendanceManagement = () => {
             <CheckCircle className="w-5 h-5 text-emerald-500" />
             <span className="w-2 h-2 bg-emerald-400 rounded-full"></span>
           </div>
-          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">H</div>
-          <div className="text-lg font-bold text-gray-900 dark:text-white">1</div>
+          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Attendance Rate</div>
+          <div className="text-lg font-bold text-gray-900 dark:text-white">
+            {attendanceSummary.totalDays > 0 ? 
+              Math.round((attendanceSummary.presentDays / attendanceSummary.totalDays) * 100) : 0}%
+          </div>
         </div>
 
         <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 hover:shadow-xl transition-all duration-300">
@@ -142,8 +308,13 @@ const AttendanceManagement = () => {
             <AlertCircle className="w-5 h-5 text-red-500" />
             <span className="w-2 h-2 bg-red-400 rounded-full"></span>
           </div>
-          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Late</div>
-          <div className="text-lg font-bold text-gray-900 dark:text-white">3</div>
+          <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Today Status</div>
+          <div className="text-lg font-bold text-gray-900 dark:text-white">
+            {todayAttendance?.status ? 
+              todayAttendance.status.charAt(0).toUpperCase() + todayAttendance.status.slice(1) : 
+              'Absent'
+            }
+          </div>
         </div>
       </div>
 
@@ -177,18 +348,9 @@ const AttendanceManagement = () => {
                 onChange={(e) => setSelectedMonth(e.target.value)}
                 className="min-w-[120px] px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200"
               >
-                <option>January</option>
-                <option>February</option>
-                <option>March</option>
-                <option>April</option>
-                <option>May</option>
-                <option>June</option>
-                <option>July</option>
-                <option>August</option>
-                <option>September</option>
-                <option>October</option>
-                <option>November</option>
-                <option>December</option>
+                {monthNames.map(month => (
+                  <option key={month} value={month}>{month}</option>
+                ))}
               </select>
               <Button variant="primary" className="flex items-center gap-2 whitespace-nowrap">
                 <Download className="w-4 h-4" />
@@ -205,7 +367,10 @@ const AttendanceManagement = () => {
               <span className="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">Show</span>
               <select 
                 value={entriesPerPage}
-                onChange={(e) => setEntriesPerPage(e.target.value)}
+                onChange={(e) => {
+                  setEntriesPerPage(e.target.value);
+                  setCurrentPage(1);
+                }}
                 className="min-w-[80px] px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200"
               >
                 <option>10</option>
@@ -247,39 +412,65 @@ const AttendanceManagement = () => {
                 <th className="text-left py-4 px-6 font-semibold text-gray-900 dark:text-white border-b border-gray-200 dark:border-gray-600">Out Time</th>
                 <th className="text-left py-4 px-6 font-semibold text-gray-900 dark:text-white border-b border-gray-200 dark:border-gray-600">Worked Hours</th>
                 <th className="text-left py-4 px-6 font-semibold text-gray-900 dark:text-white border-b border-gray-200 dark:border-gray-600">Status</th>
-                <th className="text-left py-4 px-6 font-semibold text-gray-900 dark:text-white border-b border-gray-200 dark:border-gray-600">Shortage / Excess</th>
+                <th className="text-left py-4 px-6 font-semibold text-gray-900 dark:text-white border-b border-gray-200 dark:border-gray-600">Overtime</th>
                 <th className="text-left py-4 px-6 font-semibold text-gray-900 dark:text-white border-b border-gray-200 dark:border-gray-600">Remarks</th>
               </tr>
             </thead>
             <tbody className="bg-white dark:bg-gray-800">
-              {/* Sample Data Row */}
-              <tr className="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors duration-200">
-                <td className="py-4 px-6 text-gray-900 dark:text-white border-b border-gray-100 dark:border-gray-700">1</td>
-                <td className="py-4 px-6 text-gray-900 dark:text-white border-b border-gray-100 dark:border-gray-700">20-Jan-2025</td>
-                <td className="py-4 px-6 text-gray-900 dark:text-white border-b border-gray-100 dark:border-gray-700">Monday</td>
-                <td className="py-4 px-6 text-gray-900 dark:text-white border-b border-gray-100 dark:border-gray-700">09:00 AM</td>
-                <td className="py-4 px-6 text-gray-900 dark:text-white border-b border-gray-100 dark:border-gray-700">06:00 PM</td>
-                <td className="py-4 px-6 text-gray-900 dark:text-white border-b border-gray-100 dark:border-gray-700">08:00</td>
-                <td className="py-4 px-6 border-b border-gray-100 dark:border-gray-700">
-                  <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
-                    <CheckCircle className="w-3 h-3 mr-1" />
-                    Present
-                  </span>
-                </td>
-                <td className="py-4 px-6 text-gray-900 dark:text-white border-b border-gray-100 dark:border-gray-700">--</td>
-                <td className="py-4 px-6 text-gray-900 dark:text-white border-b border-gray-100 dark:border-gray-700">On Time</td>
-              </tr>
-              
-              {/* Empty State */}
-              <tr>
-                <td colSpan="9" className="text-center py-12">
-                  <div className="flex flex-col items-center justify-center">
-                    <Clock className="w-12 h-12 text-gray-300 dark:text-gray-600 mb-4" />
-                    <p className="text-gray-500 dark:text-gray-400 text-lg font-medium">No attendance records found</p>
-                    <p className="text-gray-400 dark:text-gray-500 text-sm mt-1">Your punch details will appear here once you start marking attendance</p>
-                  </div>
-                </td>
-              </tr>
+              {loading ? (
+                <tr>
+                  <td colSpan="9" className="text-center py-12">
+                    <div className="flex flex-col items-center justify-center">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-4"></div>
+                      <p className="text-gray-500 dark:text-gray-400">Loading attendance records...</p>
+                    </div>
+                  </td>
+                </tr>
+              ) : currentEntries.length > 0 ? (
+                currentEntries.map((record, index) => (
+                  <tr key={record.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors duration-200">
+                    <td className="py-4 px-6 text-gray-900 dark:text-white border-b border-gray-100 dark:border-gray-700">
+                      {startIndex + index + 1}
+                    </td>
+                    <td className="py-4 px-6 text-gray-900 dark:text-white border-b border-gray-100 dark:border-gray-700">
+                      {formatDateDisplay(record.date)}
+                    </td>
+                    <td className="py-4 px-6 text-gray-900 dark:text-white border-b border-gray-100 dark:border-gray-700">
+                      {getDayName(record.date)}
+                    </td>
+                    <td className="py-4 px-6 text-gray-900 dark:text-white border-b border-gray-100 dark:border-gray-700">
+                      {record.checkInTime || '--'}
+                    </td>
+                    <td className="py-4 px-6 text-gray-900 dark:text-white border-b border-gray-100 dark:border-gray-700">
+                      {record.checkOutTime || '--'}
+                    </td>
+                    <td className="py-4 px-6 text-gray-900 dark:text-white border-b border-gray-100 dark:border-gray-700">
+                      {record.workingHours || '0.00'}h
+                    </td>
+                    <td className="py-4 px-6 border-b border-gray-100 dark:border-gray-700">
+                      {getStatusBadge(record.status, record.isLateCheckIn, record.isEarlyCheckOut)}
+                    </td>
+                    <td className="py-4 px-6 text-gray-900 dark:text-white border-b border-gray-100 dark:border-gray-700">
+                      {record.overtimeHours || '0.00'}h
+                    </td>
+                    <td className="py-4 px-6 text-gray-900 dark:text-white border-b border-gray-100 dark:border-gray-700">
+                      {record.notes || '--'}
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan="9" className="text-center py-12">
+                    <div className="flex flex-col items-center justify-center">
+                      <Clock className="w-12 h-12 text-gray-300 dark:text-gray-600 mb-4" />
+                      <p className="text-gray-500 dark:text-gray-400 text-lg font-medium">No attendance records found</p>
+                      <p className="text-gray-400 dark:text-gray-500 text-sm mt-1">
+                        {searchTerm ? 'Try adjusting your search criteria' : 'Your punch details will appear here once you start marking attendance'}
+                      </p>
+                    </div>
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -288,17 +479,42 @@ const AttendanceManagement = () => {
         <div className="bg-gray-50 dark:bg-gray-800/50 px-6 py-4 border-t border-gray-200 dark:border-gray-700">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="text-sm text-gray-600 dark:text-gray-400">
-              Showing <span className="font-medium">1</span> to <span className="font-medium">1</span> of <span className="font-medium">1</span> entries
+              Showing <span className="font-medium">{startIndex + 1}</span> to{' '}
+              <span className="font-medium">{Math.min(endIndex, totalEntries)}</span> of{' '}
+              <span className="font-medium">{totalEntries}</span> entries
             </div>
             <div className="flex items-center gap-2">
-              <button className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200" disabled>
+              <button 
+                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                disabled={currentPage === 1}
+                className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+              >
                 <ChevronLeft className="w-4 h-4" />
                 Previous
               </button>
               <div className="flex items-center gap-1">
-                <button className="w-8 h-8 rounded-lg bg-blue-600 text-white font-medium">1</button>
+                {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+                  const pageNum = i + 1;
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => setCurrentPage(pageNum)}
+                      className={`w-8 h-8 rounded-lg font-medium ${
+                        currentPage === pageNum
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-600'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
               </div>
-              <button className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200" disabled>
+              <button 
+                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                disabled={currentPage === totalPages || totalPages === 0}
+                className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+              >
                 Next
                 <ChevronRight className="w-4 h-4" />
               </button>

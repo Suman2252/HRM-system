@@ -116,6 +116,7 @@ const Settings = () => {
                 <input
                   type={showCurrentPassword ? 'text' : 'password'}
                   id="currentPassword"
+                  autoComplete="current-password"
                   value={passwordForm.currentPassword}
                   onChange={(e) => setPasswordForm({ ...passwordForm, currentPassword: e.target.value })}
                   className="input pr-10"
@@ -142,6 +143,7 @@ const Settings = () => {
                 <input
                   type={showNewPassword ? 'text' : 'password'}
                   id="newPassword"
+                  autoComplete="new-password"
                   value={passwordForm.newPassword}
                   onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
                   className="input pr-10"
@@ -168,6 +170,7 @@ const Settings = () => {
                 <input
                   type={showConfirmPassword ? 'text' : 'password'}
                   id="confirmPassword"
+                  autoComplete="new-password"
                   value={passwordForm.confirmPassword}
                   onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
                   className="input pr-10"

@@ -18,23 +18,74 @@ const userSchema = new mongoose.Schema({
     enum: ['admin', 'hr_manager', 'employee'],
     default: 'employee'
   },
-  employeeId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Employee',
-    default: null
-  },
+  // Basic Information
   firstName: {
     type: String,
-    default: ''
+    required: true
   },
   lastName: {
     type: String,
-    default: ''
+    required: true
   },
   phone: {
     type: String,
     default: ''
   },
+  dateOfBirth: {
+    type: Date,
+    default: null
+  },
+  profileImage: {
+    type: String,
+    default: null
+  },
+  bio: {
+    type: String,
+    default: ''
+  },
+  
+  // Employee Specific Information
+  employeeCode: {
+    type: String,
+    unique: true,
+    sparse: true // Allows null values for non-employees
+  },
+  department: {
+    type: String,
+    default: ''
+  },
+  designation: {
+    type: String,
+    default: ''
+  },
+  employmentType: {
+    type: String,
+    enum: ['full_time', 'part_time', 'contract', 'intern', ''],
+    default: ''
+  },
+  salary: {
+    type: Number,
+    default: 0
+  },
+  dateOfJoining: {
+    type: Date,
+    default: null
+  },
+  reportingManager: {
+    type: String,
+    default: ''
+  },
+  workLocation: {
+    type: String,
+    default: ''
+  },
+  status: {
+    type: String,
+    enum: ['active', 'inactive', 'on_leave', 'terminated', ''],
+    default: 'active'
+  },
+  
+  // Address Information
   address: {
     street: { type: String, default: '' },
     city: { type: String, default: '' },
@@ -42,22 +93,15 @@ const userSchema = new mongoose.Schema({
     zipCode: { type: String, default: '' },
     country: { type: String, default: '' }
   },
-  dateOfBirth: {
-    type: Date,
-    default: null
+  
+  // Emergency Contact
+  emergencyContact: {
+    name: { type: String, default: '' },
+    relationship: { type: String, default: '' },
+    phone: { type: String, default: '' }
   },
-  bio: {
-    type: String,
-    default: ''
-  },
-  profileImage: {
-    type: String,
-    default: null
-  },
-  employeeCode: {
-    type: String,
-    default: ''
-  },
+  
+  // Personal Information
   bloodGroup: {
     type: String,
     default: ''
@@ -71,6 +115,8 @@ const userSchema = new mongoose.Schema({
     aadhar: { type: String, default: '' },
     marital: { type: String, default: '' }
   },
+  
+  // Family Information
   familyInfo: {
     fatherName: { type: String, default: '' },
     fatherAge: { type: String, default: '' },
@@ -81,16 +127,8 @@ const userSchema = new mongoose.Schema({
     passport: { type: String, default: '' },
     other: { type: String, default: '' }
   },
-  jobInfo: {
-    department: { type: String, default: '' },
-    designation: { type: String, default: '' },
-    employmentType: { type: String, default: '' },
-    salary: { type: String, default: '' },
-    joiningDate: { type: Date, default: null },
-    reportingManager: { type: String, default: '' },
-    workLocation: { type: String, default: '' },
-    employeeType: { type: String, default: '' }
-  },
+  
+  // Education Information
   education: {
     highestQualification: { type: String, default: '' },
     university: { type: String, default: '' },
@@ -99,6 +137,8 @@ const userSchema = new mongoose.Schema({
     specialization: { type: String, default: '' },
     additionalCertifications: { type: String, default: '' }
   },
+  
+  // Dependents
   dependents: [{
     name: { type: String, default: '' },
     relationship: { type: String, default: '' },
@@ -106,6 +146,8 @@ const userSchema = new mongoose.Schema({
     gender: { type: String, default: '' },
     isNominee: { type: Boolean, default: false }
   }],
+  
+  // Work Experience
   experience: [{
     companyName: { type: String, default: '' },
     designation: { type: String, default: '' },
@@ -114,6 +156,8 @@ const userSchema = new mongoose.Schema({
     salary: { type: String, default: '' },
     reasonForLeaving: { type: String, default: '' }
   }],
+  
+  // EPF Information
   epfInfo: {
     epfNumber: { type: String, default: '' },
     uanNumber: { type: String, default: '' },
@@ -122,6 +166,8 @@ const userSchema = new mongoose.Schema({
     pfJoiningDate: { type: Date, default: null },
     previousPfNumber: { type: String, default: '' }
   },
+  
+  // ESI Information
   esiInfo: {
     esiNumber: { type: String, default: '' },
     esiNominee: { type: String, default: '' },
@@ -129,6 +175,18 @@ const userSchema = new mongoose.Schema({
     dispensaryName: { type: String, default: '' },
     esiJoiningDate: { type: Date, default: null }
   },
+  
+  // Documents
+  documents: [{
+    type: { type: String, default: '' },
+    name: { type: String, default: '' },
+    uploadDate: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  
+  // System Information
   isActive: {
     type: Boolean,
     default: true
@@ -173,6 +231,15 @@ userSchema.methods.comparePassword = async function(candidatePassword) {
 // Update the updatedAt field before saving
 userSchema.pre('save', function(next) {
   this.updatedAt = Date.now();
+  next();
+});
+
+// Generate employee code for employees
+userSchema.pre('save', function(next) {
+  if (this.role === 'employee' && !this.employeeCode) {
+    // Generate employee code: EMP + timestamp
+    this.employeeCode = 'EMP' + Date.now().toString().slice(-6);
+  }
   next();
 });
 

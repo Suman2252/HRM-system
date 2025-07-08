@@ -127,6 +127,32 @@ const EmployeeList = () => {
     }
   };
 
+  const getUserTypeBadgeColor = (role) => {
+    switch (role) {
+      case 'admin':
+        return 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200';
+      case 'hr_manager':
+        return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
+      case 'employee':
+        return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200';
+      default:
+        return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200';
+    }
+  };
+
+  const formatUserType = (role) => {
+    switch (role) {
+      case 'admin':
+        return 'ADMIN USER';
+      case 'hr_manager':
+        return 'HR MANAGER';
+      case 'employee':
+        return 'EMPLOYEE';
+      default:
+        return 'USER';
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-96">
@@ -238,8 +264,8 @@ const EmployeeList = () => {
                     <h3 className="font-semibold text-gray-900 dark:text-gray-100">
                       {employee.firstName} {employee.lastName}
                     </h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400">
-                      {employee.employeeId}
+                    <p className="text-sm text-gray-600 dark:text-gray-400 font-semibold">
+                      {employee.role.toUpperCase().replace('_', ' ')} - {employee.employeeId}
                     </p>
                   </div>
                 </div>

@@ -1,11 +1,18 @@
 import axios from 'axios';
 
+const API_BASE_URL = 'http://localhost:5001';
+
 class EmployeeStore {
 
   // Get all employees
   async getAllEmployees() {
     try {
-      const response = await axios.get('/api/employees');
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`${API_BASE_URL}/api/employees`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
       return response.data.data;
     } catch (error) {
       console.error('Error fetching employees:', error);
@@ -16,7 +23,12 @@ class EmployeeStore {
   // Get employee by ID
   async getEmployeeById(id) {
     try {
-      const response = await axios.get(`/api/employees/${id}`);
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`${API_BASE_URL}/api/employees/${id}`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
       return response.data.data;
     } catch (error) {
       console.error('Error fetching employee:', error);
@@ -27,7 +39,12 @@ class EmployeeStore {
   // Add new employee
   async addEmployee(employeeData) {
     try {
-      const response = await axios.post('/api/employees', employeeData);
+      const token = localStorage.getItem('token');
+      const response = await axios.post(`${API_BASE_URL}/api/employees`, employeeData, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
       return response.data.data;
     } catch (error) {
       console.error('Error adding employee:', error);
@@ -38,7 +55,12 @@ class EmployeeStore {
   // Update employee
   async updateEmployee(id, updatedData) {
     try {
-      const response = await axios.put(`/api/employees/${id}`, updatedData);
+      const token = localStorage.getItem('token');
+      const response = await axios.put(`${API_BASE_URL}/api/employees/${id}`, updatedData, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
       return response.data.data;
     } catch (error) {
       console.error('Error updating employee:', error);
@@ -49,7 +71,12 @@ class EmployeeStore {
   // Delete employee
   async deleteEmployee(id) {
     try {
-      const response = await axios.delete(`/api/employees/${id}`);
+      const token = localStorage.getItem('token');
+      const response = await axios.delete(`${API_BASE_URL}/api/employees/${id}`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
       return response.data.data;
     } catch (error) {
       console.error('Error deleting employee:', error);

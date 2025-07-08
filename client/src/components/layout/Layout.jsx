@@ -1,23 +1,17 @@
 import { useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { Outlet } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import Sidebar from './Sidebar';
 import Header from './Header';
 
-const Layout = ({ children }) => {
+const Layout = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { isAuthenticated } = useAuth();
-  const location = useLocation();
 
-  // Don't show layout for auth pages
-  const authPages = ['/login', '/register', '/forgot-password'];
-  const isAuthPage = authPages.some(page => location.pathname.startsWith(page)) || 
-                    location.pathname.startsWith('/reset-password');
-
-  if (!isAuthenticated || isAuthPage) {
+  if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-        {children}
+        <Outlet />
       </div>
     );
   }
@@ -35,7 +29,7 @@ const Layout = ({ children }) => {
         {/* Page content */}
         <main className="py-6">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-            {children}
+            <Outlet />
           </div>
         </main>
       </div>

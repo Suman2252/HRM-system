@@ -30,6 +30,8 @@ async function createEmployeeUser() {
       email,
       password,
       role,
+      firstName: 'New',
+      lastName: 'Employee',
       isActive: true,
       createdBy: 'system'
     });

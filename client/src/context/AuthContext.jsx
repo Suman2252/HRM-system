@@ -83,7 +83,7 @@ export const AuthProvider = ({ children }) => {
       if (token) {
         setAuthToken(token);
         try {
-      const response = await axios.get('/api/auth/me');
+      const response = await axios.get('http://localhost:5001/api/auth/me');
           dispatch({
             type: 'AUTH_SUCCESS',
             payload: {
@@ -107,7 +107,7 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password) => {
     dispatch({ type: 'AUTH_START' });
     try {
-      const response = await axios.post('/api/auth/login', { email, password });
+      const response = await axios.post('http://localhost:5001/api/auth/login', { email, password });
       
       // Check if password change is required (first login)
       if (response.data.requirePasswordChange) {
@@ -143,7 +143,7 @@ export const AuthProvider = ({ children }) => {
   const register = async (userData) => {
     dispatch({ type: 'AUTH_START' });
     try {
-      const response = await axios.post('/api/auth/register', userData);
+      const response = await axios.post('http://localhost:5001/api/auth/register', userData);
       const { token, user } = response.data;
       
       setAuthToken(token);
@@ -165,7 +165,7 @@ export const AuthProvider = ({ children }) => {
   // Logout function
   const logout = async () => {
     try {
-      await axios.post('/api/auth/logout');
+      await axios.post('http://localhost:5001/api/auth/logout');
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
@@ -178,7 +178,7 @@ export const AuthProvider = ({ children }) => {
   // Update profile function
   const updateProfile = async (profileData) => {
     try {
-      const response = await axios.put('/api/auth/profile', profileData);
+      const response = await axios.put('http://localhost:5001/api/auth/profile', profileData);
       dispatch({
         type: 'UPDATE_USER',
         payload: response.data.data,
@@ -200,7 +200,7 @@ export const AuthProvider = ({ children }) => {
         setAuthToken(tempToken);
       }
 
-      const response = await axios.post('/api/auth/change-password', passwordData);
+      const response = await axios.post('http://localhost:5001/api/auth/change-password', passwordData);
       
       // Update token after password change
       const { token } = response.data;

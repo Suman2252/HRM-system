@@ -1,0 +1,179 @@
+{
+    "project": "HRM System",
+    "tasks": [
+        {
+            "section": "Project Setup",
+            "items": [
+                "Choose Tech Stack (Frontend, Backend, DB, Auth)",
+                "Set up Project Repository (Git)",
+                "Create Frontend Project Structure",
+                "Create Backend Project Structure",
+                "Create Database Schema (ERD)",
+                "Implement Role-Based Auth (JWT)",
+                "Setup File Storage (S3/Cloudinary)",
+                "Setup CI/CD & Deployment Pipeline"
+            ]
+        },
+        {
+            "section": "Core Auth & Roles",
+            "items": [
+                "Login & Logout for all Roles",
+                "Register Admin/HR Manager",
+                "Password Reset / Change Password",
+                "Implement Role-Based Access Control Middleware",
+                "2FA for Admin & HR",
+                "Session Management & Auto-Logout"
+            ]
+        },
+        {
+            "section": "Employee Management",
+            "items": [
+                "Add New Employee",
+                "Edit Employee Details",
+                "Terminate Employee",
+                "Upload Documents (ID, Certificates)",
+                "Onboarding Checklist",
+                "Assign Departments & Roles",
+                "Manage Emergency Contacts",
+                "Employee Self-Profile Update"
+            ]
+        },
+        {
+            "section": "Leave & Attendance",
+            "items": [
+                "Create Leave Policies",
+                "Leave Application Form (Employee)",
+                "Leave Approval (Manager, HR)",
+                "Leave Status Notifications",
+                "Attendance Punch-In/Out (Integration/Biometric)",
+                "Attendance Regularization Request",
+                "Holiday Calendar Setup"
+            ]
+        },
+        {
+            "section": "Payroll Management",
+            "items": [
+                "Define Salary Structures",
+                "Generate Payslips",
+                "Calculate Deductions (Tax, PF, ESI)",
+                "Process Payroll",
+                "Reimbursement Requests",
+                "Bank Transfer Integration (Optional)",
+                "Download Payslip (Employee)"
+            ]
+        },
+        {
+            "section": "Performance Management",
+            "items": [
+                "Goal & KPI Setup",
+                "Employee Self-Appraisal",
+                "Manager Review",
+                "360-Degree Feedback",
+                "Ratings & Comments",
+                "Promotions/Warnings by Manager/HR"
+            ]
+        },
+        {
+            "section": "Recruitment",
+            "items": [
+                "Post Job Vacancies",
+                "Candidate Apply Form",
+                "Resume Upload & Parsing",
+                "Candidate Shortlisting",
+                "Schedule Interviews",
+                "Interview Feedback Form",
+                "Generate Offer Letter",
+                "Joining Process"
+            ]
+        },
+        {
+            "section": "Training & Development",
+            "items": [
+                "Create Training Calendar",
+                "Create Courses/Sessions",
+                "Assign Trainers",
+                "Assign Trainings to Employees",
+                "Mark Training Attendance",
+                "Collect Feedback",
+                "Issue Certificates"
+            ]
+        },
+        {
+            "section": "Reports & Analytics",
+            "items": [
+                "Employee Directory Report",
+                "Attendance Reports",
+                "Leave Reports",
+                "Payroll Reports",
+                "Tax Reports",
+                "Performance Reports",
+                "Export Reports (PDF/Excel)"
+            ]
+        },
+        {
+            "section": "Admin & System Settings",
+            "items": [
+                "Create Departments",
+                "Create Roles/Designations",
+                "Manage Holidays",
+                "Define Approval Workflows",
+                "User Role Management (CRUD)",
+                "Permissions Matrix Setup",
+                "Audit Logs",
+                "Backup & Restore Data"
+            ]
+        },
+        {
+            "section": "Notifications & Alerts",
+            "items": [
+                "Email Notifications (Leave, Payroll, Approvals)",
+                "SMS Notifications (Optional)",
+                "Push Notifications (Optional)"
+            ]
+        },
+        {
+            "section": "Frontend Screens",
+            "items": [
+                "Role-Based Dashboards (Admin, HR, Manager, Employee)",
+                "Login/Register/Reset Password Pages",
+                "Employee Profile Page",
+                "Leave Application Page",
+                "Attendance View Page",
+                "Payslip Download Page",
+                "Recruitment Portal",
+                "Training Calendar",
+                "Reports Dashboard",
+                "Admin Settings Panel"
+            ]
+        },
+        {
+            "section": "Security Tasks",
+            "items": [
+                "Strong Password Policy",
+                "Enable 2FA for Admin & HR",
+                "Audit Trail for Sensitive Actions",
+                "Role-based Middleware Guards",
+                "Encrypt Sensitive Data"
+            ]
+        },
+        {
+            "section": "Testing",
+            "items": [
+                "Unit Tests (APIs, DB)",
+                "Integration Tests (Auth, Roles)",
+                "Role-Based Access Tests",
+                "End-to-End Testing (Cypress/Playwright)",
+                "Load Testing (Optional)"
+            ]
+        },
+        {
+            "section": "Deployment",
+            "items": [
+                "Setup Hosting (AWS, Render, Heroku)",
+                "Database Hosting",
+                "Domain & SSL",
+                "Backups & Monitoring"
+            ]
+        }
+    ]
+}

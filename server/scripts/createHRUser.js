@@ -30,6 +30,8 @@ async function createHRUser() {
       email,
       password,
       role,
+      firstName: 'HR',
+      lastName: 'Manager',
       isActive: true,
       createdBy: 'system'
     });

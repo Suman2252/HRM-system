@@ -10,13 +10,18 @@ class RealEmailService {
     if (this.isInitialized) return;
 
     // Method 1: Gmail SMTP (if configured)
-    if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+    if (process.env.MAIL_USER && process.env.MAIL_PASS) {
       try {
         const gmailTransporter = nodemailer.createTransport({
-          service: 'gmail',
+          host: process.env.MAIL_HOST || 'smtp.gmail.com',
+          port: 587,
+          secure: false, // true for 465, false for other ports
           auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASS
+            user: process.env.MAIL_USER,
+            pass: process.env.MAIL_PASS
+          },
+          tls: {
+            rejectUnauthorized: false
           }
         });
         this.transporters.push({ name: 'Gmail', transporter: gmailTransporter });

@@ -1,3 +1,4 @@
+
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
@@ -6,8 +7,8 @@ const mongoose = require('mongoose');
 require('dotenv').config();
 
 // Import models and services
-const Employee = require('./models/Employee');
 const User = require('./models/User');
+const Attendance = require('./models/AttendanceEnhanced');
 const emailService = require('./services/emailService');
 const realEmailService = require('./services/realEmailService');
 const PasswordGenerator = require('./utils/passwordGenerator');
@@ -28,27 +29,55 @@ const initializeDefaultUsers = async () => {
     // Check if admin user exists
     const adminExists = await User.findOne({ email: 'admin@hrm.com' });
     if (!adminExists) {
+      // Generate admin ID
+      const adminCount = await User.countDocuments({ role: 'admin' });
+      const adminCode = `ADM${(adminCount + 1).toString().padStart(4, '0')}`;
+      
       const adminUser = new User({
         email: 'admin@hrm.com',
         password: 'admin123',
         role: 'admin',
+        firstName: 'Admin',
+        lastName: 'User',
+        employeeCode: adminCode,
         createdBy: 'system'
       });
       await adminUser.save();
-      console.log('✅ Default admin user created');
+      console.log(`✅ Default admin user created with ID: ${adminCode}`);
+    } else if (!adminExists.employeeCode) {
+      // Update existing admin with employee code
+      const adminCount = await User.countDocuments({ role: 'admin' });
+      const adminCode = `ADM${adminCount.toString().padStart(4, '0')}`;
+      adminExists.employeeCode = adminCode;
+      await adminExists.save();
+      console.log(`✅ Default admin user updated with ID: ${adminCode}`);
     }
 
     // Check if HR manager exists
     const hrExists = await User.findOne({ email: 'hr@hrm.com' });
     if (!hrExists) {
+      // Generate HR ID
+      const hrCount = await User.countDocuments({ role: 'hr_manager' });
+      const hrCode = `HRM${(hrCount + 1).toString().padStart(4, '0')}`;
+      
       const hrUser = new User({
         email: 'hr@hrm.com',
         password: 'hr123456',
         role: 'hr_manager',
+        firstName: 'HR',
+        lastName: 'Manager',
+        employeeCode: hrCode,
         createdBy: 'system'
       });
       await hrUser.save();
-      console.log('✅ Default HR manager created');
+      console.log(`✅ Default HR manager created with ID: ${hrCode}`);
+    } else if (!hrExists.employeeCode) {
+      // Update existing HR with employee code
+      const hrCount = await User.countDocuments({ role: 'hr_manager' });
+      const hrCode = `HRM${hrCount.toString().padStart(4, '0')}`;
+      hrExists.employeeCode = hrCode;
+      await hrExists.save();
+      console.log(`✅ Default HR manager updated with ID: ${hrCode}`);
     }
   } catch (error) {
     console.error('❌ Error creating default users:', error);
@@ -76,7 +105,6 @@ const generateToken = (user) => {
       id: user._id || user.id, 
       email: user.email, 
       role: user.role,
-      employeeId: user.employeeId,
       tempAccess: user.tempAccess || false
     },
     JWT_SECRET,
@@ -104,6 +132,43 @@ const authenticateToken = (req, res, next) => {
 
 // Routes
 
+// Helper function to record attendance on login (supports multiple sessions)
+const recordAttendanceOnLogin = async (userId) => {
+  try {
+    const today = new Date();
+    const dateOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    
+    // Check if attendance record already exists for today
+    let attendance = await Attendance.findOne({
+      userId: userId,
+      date: dateOnly
+    });
+
+    if (!attendance) {
+      // Create new attendance record with first session
+      attendance = new Attendance({
+        userId: userId,
+        date: dateOnly
+      });
+    }
+
+    // Add new check-in session
+    const result = attendance.addCheckIn(today, 'Login check-in');
+    
+    if (result.success) {
+      await attendance.save();
+      console.log(`✅ Attendance session ${attendance.sessions.length} recorded for user ${userId} at ${today.toLocaleTimeString()}`);
+      return attendance;
+    } else {
+      console.log(`ℹ️ ${result.message} for user ${userId}`);
+      return attendance; // Return existing attendance even if new session wasn't created
+    }
+  } catch (error) {
+    console.error('Error recording attendance on login:', error);
+    return null;
+  }
+};
+
 // Login endpoint
 app.post('/api/auth/login', async (req, res) => {
   try {
@@ -114,7 +179,7 @@ app.post('/api/auth/login', async (req, res) => {
     password = password.trim();
 
     // Find user by normalized email
-    const user = await User.findOne({ email }).populate('employeeId');
+    const user = await User.findOne({ email });
     if (!user) {
       console.log(`Login failed: User not found for email ${email}`);
       return res.status(401).json({ message: 'Invalid credentials' });
@@ -132,20 +197,35 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    // Remove password change requirement - allow direct login
-    // const isFirstLogin = !user.lastLogin;
-    // if (isFirstLogin) {
-    //   return res.status(200).json({
-    //     requirePasswordChange: true,
-    //     message: 'Welcome! Please change your temporary password to continue',
-    //     tempToken: generateToken({ ...user.toObject(), tempAccess: true }),
-    //     isFirstLogin: true
-    //   });
-    // }
+    // Update last login - handle validation errors gracefully
+    try {
+      user.lastLogin = new Date();
+      await user.save();
+    } catch (validationError) {
+      // If validation fails due to missing required fields, update them with defaults
+      if (validationError.name === 'ValidationError') {
+        console.warn('User validation failed during login, fixing missing fields:', validationError.message);
+        
+        // Set default values for missing required fields
+        if (!user.firstName || user.firstName.trim() === '') {
+          user.firstName = 'User';
+        }
+        if (!user.lastName || user.lastName.trim() === '') {
+          user.lastName = 'Name';
+        }
+        
+        // Try saving again with default values
+        user.lastLogin = new Date();
+        await user.save();
+        console.log('✅ User fields updated with defaults and login recorded');
+      } else {
+        // Re-throw if it's not a validation error
+        throw validationError;
+      }
+    }
 
-    // Update last login
-    user.lastLogin = new Date();
-    await user.save();
+    // Record attendance on login (automatic check-in)
+    const attendanceRecord = await recordAttendanceOnLogin(user._id);
 
     // Generate token
     const token = generateToken(user);
@@ -155,23 +235,31 @@ app.post('/api/auth/login', async (req, res) => {
       id: user._id,
       email: user.email,
       role: user.role,
-      employeeId: user.employeeId,
-      lastLogin: user.lastLogin
+      firstName: user.firstName,
+      lastName: user.lastName,
+      department: user.department,
+      designation: user.designation,
+      lastLogin: user.lastLogin,
+      todayAttendance: attendanceRecord ? {
+        checkInTime: attendanceRecord.checkInTime,
+        status: attendanceRecord.status,
+        isLateCheckIn: attendanceRecord.isLateCheckIn
+      } : null
     };
 
-    // If user has an associated employee record, include employee details
-    if (user.employeeId) {
-      userData.employee = {
-        firstName: user.employeeId.firstName,
-        lastName: user.employeeId.lastName,
-        department: user.employeeId.department,
-        designation: user.employeeId.designation
-      };
+    // Prepare attendance message safely
+    let attendanceMessage = 'Attendance not recorded';
+    if (attendanceRecord && attendanceRecord.sessions && attendanceRecord.sessions.length > 0) {
+      const lastSession = attendanceRecord.sessions[attendanceRecord.sessions.length - 1];
+      if (lastSession && lastSession.checkInTime) {
+        attendanceMessage = `Checked in at ${lastSession.checkInTime.toLocaleTimeString()}${attendanceRecord.isLateCheckIn ? ' (Late)' : ''}`;
+      }
     }
 
     res.json({
       token,
-      user: userData
+      user: userData,
+      attendanceMessage
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -182,7 +270,7 @@ app.post('/api/auth/login', async (req, res) => {
 // Get current user endpoint
 app.get('/api/auth/me', authenticateToken, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).populate('employeeId');
+    const user = await User.findById(req.user.id);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -192,7 +280,6 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
       id: user._id,
       email: user.email,
       role: user.role,
-      employeeId: user.employeeId,
       firstName: user.firstName,
       lastName: user.lastName,
       phone: user.phone,
@@ -204,18 +291,10 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
       bloodGroup: user.bloodGroup,
       personalInfo: user.personalInfo,
       familyInfo: user.familyInfo,
+      department: user.department,
+      designation: user.designation,
       lastLogin: user.lastLogin
     };
-
-    // If user has an associated employee record, include employee details
-    if (user.employeeId) {
-      userData.employee = {
-        firstName: user.employeeId.firstName,
-        lastName: user.employeeId.lastName,
-        department: user.employeeId.department,
-        designation: user.employeeId.designation
-      };
-    }
 
     res.json({
       data: {
@@ -228,9 +307,64 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
   }
 });
 
+// Helper function to record attendance on logout (supports multiple sessions)
+const recordAttendanceOnLogout = async (userId) => {
+  try {
+    const today = new Date();
+    const dateOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    
+    // Find today's attendance record
+    let attendance = await Attendance.findOne({
+      userId: userId,
+      date: dateOnly
+    });
+
+    if (attendance) {
+      // Add check-out to the current active session
+      const result = attendance.addCheckOut(today, 'Logout check-out');
+      
+      if (result.success) {
+        await attendance.save();
+        console.log(`✅ Attendance session checkout recorded for user ${userId} at ${today.toLocaleTimeString()}`);
+        return attendance;
+      } else {
+        console.log(`ℹ️ ${result.message} for user ${userId}`);
+        return null;
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error recording attendance on logout:', error);
+    return null;
+  }
+};
+
 // Logout endpoint
-app.post('/api/auth/logout', authenticateToken, (req, res) => {
-  res.json({ message: 'Logged out successfully' });
+app.post('/api/auth/logout', authenticateToken, async (req, res) => {
+  try {
+    // Record attendance on logout (automatic check-out)
+    const attendanceRecord = await recordAttendanceOnLogout(req.user.id);
+    
+    let attendanceMessage = 'Attendance checkout not recorded';
+    if (attendanceRecord) {
+      // Find the last completed session to get checkout time
+      const lastCompletedSession = attendanceRecord.sessions.filter(s => s.checkOutTime).pop();
+      if (lastCompletedSession && lastCompletedSession.checkOutTime) {
+        attendanceMessage = `Checked out at ${lastCompletedSession.checkOutTime.toLocaleTimeString()}. Total hours: ${attendanceRecord.totalHours.toFixed(2)}`;
+      } else {
+        attendanceMessage = `Checkout recorded. Total hours: ${attendanceRecord.totalHours.toFixed(2)}`;
+      }
+    }
+    
+    res.json({ 
+      message: 'Logged out successfully',
+      attendanceMessage
+    });
+  } catch (error) {
+    console.error('Logout error:', error);
+    res.json({ message: 'Logged out successfully' });
+  }
 });
 
 // Register endpoint (disabled as per requirements)
@@ -243,7 +377,8 @@ app.put('/api/auth/profile', authenticateToken, async (req, res) => {
   try {
     const { 
       firstName, lastName, phone, address, dateOfBirth, bio, profileImage,
-      employeeCode, bloodGroup, personalInfo, familyInfo
+      employeeCode, bloodGroup, personalInfo, familyInfo, department, designation,
+      salary, dateOfJoining, emergencyContact, status
     } = req.body;
 
     // Find and update user
@@ -270,6 +405,12 @@ app.put('/api/auth/profile', authenticateToken, async (req, res) => {
     if (bloodGroup !== undefined) user.bloodGroup = bloodGroup;
     if (personalInfo !== undefined) user.personalInfo = personalInfo;
     if (familyInfo !== undefined) user.familyInfo = familyInfo;
+    if (department !== undefined) user.department = department;
+    if (designation !== undefined) user.designation = designation;
+    if (salary !== undefined) user.salary = salary;
+    if (dateOfJoining !== undefined) user.dateOfJoining = dateOfJoining;
+    if (emergencyContact !== undefined) user.emergencyContact = emergencyContact;
+    if (status !== undefined) user.status = status;
 
     await user.save();
 
@@ -289,6 +430,8 @@ app.put('/api/auth/profile', authenticateToken, async (req, res) => {
       bloodGroup: user.bloodGroup,
       personalInfo: user.personalInfo,
       familyInfo: user.familyInfo,
+      department: user.department,
+      designation: user.designation,
       lastLogin: user.lastLogin
     };
 
@@ -360,26 +503,7 @@ app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
   }
 });
 
-// Mock endpoints for other features (excluding employees since we have real endpoints)
-app.get('/api/attendance', authenticateToken, (req, res) => {
-  res.json({ data: [], message: 'Attendance data not available in demo mode' });
-});
-
-app.get('/api/leave', authenticateToken, (req, res) => {
-  res.json({ data: [], message: 'Leave data not available in demo mode' });
-});
-
-app.get('/api/payroll', authenticateToken, (req, res) => {
-  res.json({ data: [], message: 'Payroll data not available in demo mode' });
-});
-
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', message: 'HRM Server is running' });
-});
-
-// Default route
-// Employee endpoints
+// Employee endpoints (now using User model)
 app.post('/api/employees', authenticateToken, async (req, res) => {
   try {
     // Check if user has admin or HR manager role
@@ -387,24 +511,19 @@ app.post('/api/employees', authenticateToken, async (req, res) => {
       return res.status(403).json({ message: 'Not authorized to create employees' });
     }
 
-    // Check if email already exists in User collection
+    // Check if email already exists
     const existingUser = await User.findOne({ email: req.body.email });
     if (existingUser) {
-      return res.status(400).json({ message: 'Employee with this email already exists' });
+      return res.status(400).json({ message: 'User with this email already exists' });
     }
 
-    // Check if employee ID already exists
-    const existingEmployee = await Employee.findOne({ employeeId: req.body.employeeId });
-    if (existingEmployee) {
-      return res.status(400).json({ message: 'Employee with this ID already exists' });
+    // Check if employee code already exists (if provided)
+    if (req.body.employeeCode) {
+      const existingEmployee = await User.findOne({ employeeCode: req.body.employeeCode });
+      if (existingEmployee) {
+        return res.status(400).json({ message: 'Employee with this code already exists' });
+      }
     }
-
-    // Create employee record
-    const employee = new Employee({
-      ...req.body,
-      createdBy: req.user.email
-    });
-    await employee.save();
 
     // Use custom password if provided, otherwise generate a secure random password
     let employeePassword;
@@ -443,69 +562,96 @@ app.post('/api/employees', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: 'Invalid role specified' });
     }
 
-    // Create user account with the password (custom or generated)
-    // Set lastLogin to current date so user can login directly without password change requirement
-    console.log('Creating user with password:', employeePassword);
+    // Generate automatic Employee ID based on role and existing count
+    let employeeCode;
+    if (!req.body.employeeCode) {
+      // Count existing users of the same role
+      const existingCount = await User.countDocuments({ role: userRole });
+      const nextNumber = existingCount + 1;
+      
+      // Generate ID based on role
+      switch (userRole) {
+        case 'employee':
+          employeeCode = `EMP${nextNumber.toString().padStart(4, '0')}`;
+          break;
+        case 'hr_manager':
+          employeeCode = `HRM${nextNumber.toString().padStart(4, '0')}`;
+          break;
+        case 'admin':
+          employeeCode = `ADM${nextNumber.toString().padStart(4, '0')}`;
+          break;
+        default:
+          employeeCode = `USR${nextNumber.toString().padStart(4, '0')}`;
+      }
+    } else {
+      employeeCode = req.body.employeeCode;
+    }
+
+    // Create user with all employee data in one record
     const user = new User({
       email: req.body.email,
       password: employeePassword,
       role: userRole,
-      employeeId: employee._id,
       firstName: req.body.firstName,
       lastName: req.body.lastName,
-      phone: req.body.phone,
+      phone: req.body.phone || '',
+      department: req.body.department || '',
+      designation: req.body.designation || '',
+      employmentType: req.body.employmentType || '',
+      salary: req.body.salary || 0,
+      dateOfJoining: req.body.dateOfJoining || null,
+      dateOfBirth: req.body.dateOfBirth || null,
+      address: req.body.address || {},
+      emergencyContact: req.body.emergencyContact || {},
+      status: req.body.status || 'active',
+      employeeCode: employeeCode,
       lastLogin: new Date(), // Set lastLogin to allow direct login
       createdBy: req.user.email
     });
-    await user.save();
-    console.log('User created:', user.email, 'with hashed password:', user.password);
 
-    // Send welcome email with login credentials using multiple providers
-    console.log('📧 Attempting to send welcome email with multiple providers...');
-    const emailResult = await realEmailService.sendWelcomeEmail(employee, employeePassword);
+    await user.save();
+    console.log('User created:', user.email);
+
+    // Send welcome email with login credentials
+    console.log('📧 Attempting to send welcome email...');
+    const emailResult = await realEmailService.sendWelcomeEmail({
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      employeeId: user.employeeCode || user._id.toString().slice(-6)
+    }, employeePassword);
     
     // Log email sending result
     if (emailResult.success) {
-      console.log(`✅ Welcome email sent successfully to ${employee.email} via ${emailResult.provider}`);
-      console.log(`📧 Message ID: ${emailResult.messageId}`);
+      console.log(`✅ Welcome email sent successfully to ${user.email} via ${emailResult.provider}`);
     } else {
-      console.error(`❌ Failed to send welcome email to ${employee.email} with all providers:`, emailResult.error);
-      console.log('📧 Attempted providers:', emailResult.attemptedProviders);
+      console.error(`❌ Failed to send welcome email to ${user.email}:`, emailResult.error);
     }
 
     // Prepare response data (exclude sensitive information)
     const responseData = {
-      _id: employee._id,
-      employeeId: employee.employeeId,
-      firstName: employee.firstName,
-      lastName: employee.lastName,
-      email: employee.email,
-      phone: employee.phone,
-      department: employee.department,
-      designation: employee.designation,
-      employmentType: employee.employmentType,
-      salary: employee.salary,
-      dateOfJoining: employee.dateOfJoining,
-      dateOfBirth: employee.dateOfBirth,
-      status: employee.status,
-      createdAt: employee.createdAt,
-      userAccountCreated: true
+      _id: user._id,
+      employeeCode: user.employeeCode,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      phone: user.phone,
+      department: user.department,
+      designation: user.designation,
+      employmentType: user.employmentType,
+      salary: user.salary,
+      dateOfJoining: user.dateOfJoining,
+      dateOfBirth: user.dateOfBirth,
+      status: user.status,
+      role: user.role,
+      createdAt: user.createdAt
     };
 
     res.status(201).json({ 
       message: `Employee created successfully with ${isCustomPassword ? 'custom' : 'auto-generated'} credentials`,
       data: responseData,
       emailSent: emailResult.success,
-      emailDetails: emailResult.success ? {
-        provider: emailResult.provider,
-        messageId: emailResult.messageId,
-        recipient: employee.email
-      } : {
-        error: emailResult.error,
-        attemptedProviders: emailResult.attemptedProviders
-      },
-      passwordType: isCustomPassword ? 'custom' : 'generated',
-      securityNote: 'Employee can login directly with provided credentials. Password can be changed anytime from profile settings.'
+      passwordType: isCustomPassword ? 'custom' : 'generated'
     });
   } catch (error) {
     console.error('Create employee error:', error);
@@ -514,7 +660,7 @@ app.post('/api/employees', authenticateToken, async (req, res) => {
     if (error.code === 11000) {
       const field = Object.keys(error.keyPattern)[0];
       return res.status(400).json({ 
-        message: `Employee with this ${field} already exists`,
+        message: `User with this ${field} already exists`,
         field: field
       });
     }
@@ -537,7 +683,22 @@ app.post('/api/employees', authenticateToken, async (req, res) => {
 
 app.get('/api/employees', authenticateToken, async (req, res) => {
   try {
-    const employees = await Employee.find();
+    let query = {};
+    
+    // Role-based visibility
+    if (req.user.role === 'admin') {
+      // Admin can see all users (employees, HR managers, and other admins)
+      query = {};  // No filter - see all users
+    } else if (req.user.role === 'hr_manager') {
+      // HR managers can only see employees
+      query = { role: 'employee' };
+    } else {
+      // Regular employees cannot access this endpoint
+      return res.status(403).json({ message: 'Not authorized to view employee list' });
+    }
+
+    const employees = await User.find(query).select('-password'); // Exclude password field
+
     res.json({ data: employees });
   } catch (error) {
     console.error('Get employees error:', error);
@@ -547,7 +708,7 @@ app.get('/api/employees', authenticateToken, async (req, res) => {
 
 app.get('/api/employees/:id', authenticateToken, async (req, res) => {
   try {
-    const employee = await Employee.findById(req.params.id);
+    const employee = await User.findById(req.params.id).select('-password');
     if (!employee) {
       return res.status(404).json({ message: 'Employee not found' });
     }
@@ -565,11 +726,11 @@ app.put('/api/employees/:id', authenticateToken, async (req, res) => {
       return res.status(403).json({ message: 'Not authorized to update employees' });
     }
 
-    const employee = await Employee.findByIdAndUpdate(
+    const employee = await User.findByIdAndUpdate(
       req.params.id,
       { ...req.body, updatedAt: Date.now() },
       { new: true }
-    );
+    ).select('-password');
 
     if (!employee) {
       return res.status(404).json({ message: 'Employee not found' });
@@ -592,20 +753,14 @@ app.delete('/api/employees/:id', authenticateToken, async (req, res) => {
       return res.status(403).json({ message: 'Not authorized to delete employees' });
     }
 
-    // Find the employee first
-    const employee = await Employee.findById(req.params.id);
+    // Find and delete the user
+    const employee = await User.findByIdAndDelete(req.params.id);
     if (!employee) {
       return res.status(404).json({ message: 'Employee not found' });
     }
 
-    // Delete the associated user account first
-    await User.findOneAndDelete({ email: employee.email });
-    
-    // Delete the employee record
-    await Employee.findByIdAndDelete(req.params.id);
-
     res.json({ 
-      message: 'Employee and associated user account deleted successfully',
+      message: 'Employee deleted successfully',
       data: employee 
     });
   } catch (error) {
@@ -614,10 +769,721 @@ app.delete('/api/employees/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// Dynamic Attendance endpoints
+app.post('/api/attendance/checkin', authenticateToken, async (req, res) => {
+  try {
+    const { location, notes } = req.body;
+    const attendanceRecord = await recordAttendanceOnLogin(req.user.id);
+    
+    if (attendanceRecord) {
+      // Update notes if provided
+      if (notes) {
+        attendanceRecord.notes = notes;
+        await attendanceRecord.save();
+      }
+      
+      res.json({
+        message: `Checked in successfully at ${attendanceRecord.checkInTime.toLocaleTimeString()}${attendanceRecord.isLateCheckIn ? ' (Late)' : ''}`,
+        data: {
+          id: attendanceRecord._id,
+          date: attendanceRecord.date,
+          checkInTime: attendanceRecord.checkInTime,
+          status: attendanceRecord.status,
+          isLateCheckIn: attendanceRecord.isLateCheckIn,
+          notes: attendanceRecord.notes,
+          location: location || 'Office'
+        }
+      });
+    } else {
+      res.status(400).json({ message: 'Already checked in today or error recording attendance' });
+    }
+  } catch (error) {
+    console.error('Check-in error:', error);
+    res.status(500).json({ message: 'Error recording check-in' });
+  }
+});
+
+app.post('/api/attendance/checkout', authenticateToken, async (req, res) => {
+  try {
+    const { notes } = req.body;
+    const attendanceRecord = await recordAttendanceOnLogout(req.user.id);
+    
+    if (attendanceRecord) {
+      // Update notes if provided
+      if (notes) {
+        attendanceRecord.notes = notes;
+        await attendanceRecord.save();
+      }
+      
+      // Find the last completed session to get checkout time
+      const lastCompletedSession = attendanceRecord.sessions.filter(s => s.checkOutTime).pop();
+      const checkoutTime = lastCompletedSession ? lastCompletedSession.checkOutTime : new Date();
+      
+      res.json({
+        message: `Checked out successfully at ${checkoutTime.toLocaleTimeString()}. Total hours: ${attendanceRecord.totalHours.toFixed(2)}`,
+        data: {
+          id: attendanceRecord._id,
+          date: attendanceRecord.date,
+          checkInTime: attendanceRecord.sessions.length > 0 ? attendanceRecord.sessions[0].checkInTime : null,
+          checkOutTime: checkoutTime,
+          totalHours: attendanceRecord.totalHours,
+          workingHours: attendanceRecord.workingHours,
+          status: attendanceRecord.status,
+          isEarlyCheckOut: attendanceRecord.isEarlyCheckOut,
+          notes: attendanceRecord.notes
+        }
+      });
+    } else {
+      res.status(400).json({ message: 'No check-in found for today or already checked out' });
+    }
+  } catch (error) {
+    console.error('Check-out error:', error);
+    res.status(500).json({ message: 'Error recording check-out' });
+  }
+});
+
+app.get('/api/attendance', authenticateToken, async (req, res) => {
+  try {
+    const { startDate, endDate, userId } = req.query;
+    
+    // Determine which user's attendance to fetch
+    let targetUserId = req.user.id;
+    
+    // If userId is provided and user has admin/HR role, allow viewing other user's attendance
+    if (userId && (req.user.role === 'admin' || req.user.role === 'hr_manager')) {
+      targetUserId = userId;
+    }
+    
+    // Set date range (default to current month if not provided)
+    const now = new Date();
+    const start = startDate ? new Date(startDate) : new Date(now.getFullYear(), now.getMonth(), 1);
+    const end = endDate ? new Date(endDate) : new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    
+    // Fetch attendance records
+    const attendanceRecords = await Attendance.find({
+      userId: targetUserId,
+      date: {
+        $gte: start,
+        $lte: end
+      }
+    }).sort({ date: -1 });
+    
+    // Calculate summary
+    const summary = {
+      totalDays: attendanceRecords.length,
+      presentDays: attendanceRecords.filter(r => r.status === 'present').length,
+      lateDays: attendanceRecords.filter(r => r.status === 'late').length,
+      halfDays: attendanceRecords.filter(r => r.status === 'half_day').length,
+      absentDays: attendanceRecords.filter(r => r.status === 'absent').length,
+      totalWorkingHours: attendanceRecords.reduce((sum, r) => sum + (r.workingHours || 0), 0),
+      totalOvertimeHours: attendanceRecords.reduce((sum, r) => sum + (r.overtimeHours || 0), 0)
+    };
+    
+    // Format data for response with proper session handling
+    const formattedData = attendanceRecords.map(record => {
+      // Get first check-in and last check-out from sessions
+      let firstCheckIn = null;
+      let lastCheckOut = null;
+      
+      if (record.sessions && record.sessions.length > 0) {
+        // Get first session's check-in time
+        firstCheckIn = record.sessions[0].checkInTime;
+        
+        // Get last completed session's check-out time
+        const completedSessions = record.sessions.filter(s => s.checkOutTime);
+        if (completedSessions.length > 0) {
+          lastCheckOut = completedSessions[completedSessions.length - 1].checkOutTime;
+        }
+      }
+      
+      return {
+        id: record._id,
+        date: record.date.toISOString().split('T')[0],
+        checkInTime: firstCheckIn ? firstCheckIn.toLocaleTimeString() : null,
+        checkOutTime: lastCheckOut ? lastCheckOut.toLocaleTimeString() : null,
+        totalHours: record.totalHours ? record.totalHours.toFixed(2) : '0.00',
+        workingHours: record.workingHours ? record.workingHours.toFixed(2) : '0.00',
+        status: record.status,
+        isLateCheckIn: record.isLateCheckIn,
+        isEarlyCheckOut: record.isEarlyCheckOut,
+        notes: record.notes,
+        overtimeHours: record.overtimeHours ? record.overtimeHours.toFixed(2) : '0.00',
+        sessions: record.sessions ? record.sessions.map(session => ({
+          checkInTime: session.checkInTime ? session.checkInTime.toLocaleTimeString() : null,
+          checkOutTime: session.checkOutTime ? session.checkOutTime.toLocaleTimeString() : null,
+          sessionHours: session.sessionHours ? session.sessionHours.toFixed(2) : '0.00',
+          notes: session.notes,
+          isActive: session.isActive && !session.checkOutTime
+        })) : []
+      };
+    });
+
+    res.json({ 
+      data: formattedData,
+      summary: {
+        ...summary,
+        totalWorkingHours: summary.totalWorkingHours.toFixed(2),
+        totalOvertimeHours: summary.totalOvertimeHours.toFixed(2)
+      }
+    });
+  } catch (error) {
+    console.error('Get attendance error:', error);
+    res.status(500).json({ message: 'Error fetching attendance data' });
+  }
+});
+
+// Get today's attendance status
+app.get('/api/attendance/today', authenticateToken, async (req, res) => {
+  try {
+    const today = new Date();
+    const dateOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    
+    const todayAttendance = await Attendance.findOne({
+      userId: req.user.id,
+      date: dateOnly
+    });
+    
+    if (todayAttendance) {
+      res.json({
+        data: {
+          id: todayAttendance._id,
+          date: todayAttendance.date,
+          checkInTime: todayAttendance.checkInTime,
+          checkOutTime: todayAttendance.checkOutTime,
+          status: todayAttendance.status,
+          isLateCheckIn: todayAttendance.isLateCheckIn,
+          isEarlyCheckOut: todayAttendance.isEarlyCheckOut,
+          totalHours: todayAttendance.totalHours,
+          workingHours: todayAttendance.workingHours,
+          notes: todayAttendance.notes,
+          hasCheckedIn: !!todayAttendance.checkInTime,
+          hasCheckedOut: !!todayAttendance.checkOutTime
+        }
+      });
+    } else {
+      res.json({
+        data: {
+          hasCheckedIn: false,
+          hasCheckedOut: false,
+          status: 'absent'
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Get today attendance error:', error);
+    res.status(500).json({ message: 'Error fetching today\'s attendance' });
+  }
+});
+
+app.get('/api/attendance/report', authenticateToken, (req, res) => {
+  try {
+    // Check if user has admin or HR manager role
+    if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
+      return res.status(403).json({ message: 'Not authorized to view attendance reports' });
+    }
+
+    const { month, year, department } = req.query;
+    
+    // Mock attendance report data
+    const mockReport = {
+      period: `${month || 'January'} ${year || '2024'}`,
+      department: department || 'All Departments',
+      summary: {
+        totalEmployees: 25,
+        averageAttendance: 92.5,
+        totalWorkingDays: 22,
+        totalPresent: 510,
+        totalAbsent: 40
+      },
+      employees: [
+        {
+          id: 1,
+          name: 'John Doe',
+          department: 'IT',
+          presentDays: 20,
+          absentDays: 2,
+          attendanceRate: 90.9
+        },
+        {
+          id: 2,
+          name: 'Jane Smith',
+          department: 'HR',
+          presentDays: 22,
+          absentDays: 0,
+          attendanceRate: 100
+        }
+      ]
+    };
+
+    res.json({ data: mockReport });
+  } catch (error) {
+    console.error('Get attendance report error:', error);
+    res.status(500).json({ message: 'Error fetching attendance report' });
+  }
+});
+
+// Leave endpoints
+app.post('/api/leave/request', authenticateToken, async (req, res) => {
+  try {
+    const { leaveType, startDate, endDate, reason, isHalfDay } = req.body;
+    
+    // Mock leave request
+    const leaveRequest = {
+      id: Date.now(),
+      employeeId: req.user.id,
+      leaveType,
+      startDate,
+      endDate,
+      reason,
+      isHalfDay: isHalfDay || false,
+      status: 'pending',
+      appliedDate: new Date().toISOString(),
+      approvedBy: null,
+      approvedDate: null
+    };
+
+    res.json({
+      message: 'Leave request submitted successfully',
+      data: leaveRequest
+    });
+  } catch (error) {
+    console.error('Leave request error:', error);
+    res.status(500).json({ message: 'Error submitting leave request' });
+  }
+});
+
+app.get('/api/leave', authenticateToken, (req, res) => {
+  try {
+    // Mock leave data
+    const mockLeaves = [
+      {
+        id: 1,
+        leaveType: 'Annual Leave',
+        startDate: '2024-01-20',
+        endDate: '2024-01-22',
+        days: 3,
+        reason: 'Family vacation',
+        status: 'approved',
+        appliedDate: '2024-01-10',
+        approvedBy: 'HR Manager'
+      },
+      {
+        id: 2,
+        leaveType: 'Sick Leave',
+        startDate: '2024-01-15',
+        endDate: '2024-01-15',
+        days: 1,
+        reason: 'Medical appointment',
+        status: 'pending',
+        appliedDate: '2024-01-14'
+      }
+    ];
+
+    res.json({ data: mockLeaves });
+  } catch (error) {
+    console.error('Get leave error:', error);
+    res.status(500).json({ message: 'Error fetching leave data' });
+  }
+});
+
+app.get('/api/leave/balance', authenticateToken, (req, res) => {
+  try {
+    // Mock leave balance
+    const leaveBalance = {
+      annualLeave: {
+        total: 25,
+        used: 8,
+        remaining: 17
+      },
+      sickLeave: {
+        total: 12,
+        used: 3,
+        remaining: 9
+      },
+      personalLeave: {
+        total: 5,
+        used: 1,
+        remaining: 4
+      }
+    };
+
+    res.json({ data: leaveBalance });
+  } catch (error) {
+    console.error('Get leave balance error:', error);
+    res.status(500).json({ message: 'Error fetching leave balance' });
+  }
+});
+
+// Payroll endpoints
+app.post('/api/payroll/generate', authenticateToken, async (req, res) => {
+  try {
+    // Check if user has admin or HR manager role
+    if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
+      return res.status(403).json({ message: 'Not authorized to generate payroll' });
+    }
+
+    const { month, year, employeeIds } = req.body;
+    
+    // Mock payroll generation
+    const payrollBatch = {
+      id: Date.now(),
+      month,
+      year,
+      generatedBy: req.user.email,
+      generatedDate: new Date().toISOString(),
+      employeeCount: employeeIds ? employeeIds.length : 25,
+      totalAmount: 125000,
+      status: 'generated'
+    };
+
+    res.json({
+      message: 'Payroll generated successfully',
+      data: payrollBatch
+    });
+  } catch (error) {
+    console.error('Payroll generation error:', error);
+    res.status(500).json({ message: 'Error generating payroll' });
+  }
+});
+
+app.get('/api/payroll', authenticateToken, (req, res) => {
+  try {
+    // Mock payroll data
+    const mockPayroll = [
+      {
+        id: 1,
+        month: 'January',
+        year: 2024,
+        basicSalary: 5000,
+        allowances: 1000,
+        deductions: 500,
+        netSalary: 5500,
+        status: 'paid',
+        payDate: '2024-01-31'
+      },
+      {
+        id: 2,
+        month: 'December',
+        year: 2023,
+        basicSalary: 5000,
+        allowances: 1200,
+        deductions: 450,
+        netSalary: 5750,
+        status: 'paid',
+        payDate: '2023-12-31'
+      }
+    ];
+
+    res.json({ data: mockPayroll });
+  } catch (error) {
+    console.error('Get payroll error:', error);
+    res.status(500).json({ message: 'Error fetching payroll data' });
+  }
+});
+
+app.get('/api/payroll/history', authenticateToken, (req, res) => {
+  try {
+    const { year } = req.query;
+    
+    // Mock payroll history
+    const mockHistory = [
+      {
+        id: 1,
+        month: 'January 2024',
+        employeeCount: 25,
+        totalAmount: 125000,
+        generatedDate: '2024-01-31',
+        status: 'completed'
+      },
+      {
+        id: 2,
+        month: 'December 2023',
+        employeeCount: 24,
+        totalAmount: 120000,
+        generatedDate: '2023-12-31',
+        status: 'completed'
+      }
+    ];
+
+    res.json({ data: mockHistory });
+  } catch (error) {
+    console.error('Get payroll history error:', error);
+    res.status(500).json({ message: 'Error fetching payroll history' });
+  }
+});
+
+// Analytics endpoints (using User model for employee data)
+app.get('/api/analytics/employee/demographics', authenticateToken, async (req, res) => {
+  try {
+    // Check if user has admin or HR manager role
+    if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
+      return res.status(403).json({ message: 'Not authorized to view analytics' });
+    }
+
+    // Mock demographics data
+    const demographics = {
+      totalEmployees: 156,
+      growthRate: 12,
+      retentionRate: 87,
+      retentionTrend: 5,
+      departments: [
+        { name: 'Engineering', count: 45 },
+        { name: 'Sales', count: 32 },
+        { name: 'Marketing', count: 28 },
+        { name: 'HR', count: 15 },
+        { name: 'Finance', count: 20 },
+        { name: 'Operations', count: 16 }
+      ],
+      ageGroups: [
+        { range: '20-25', count: 25, percentage: 16 },
+        { range: '26-30', count: 48, percentage: 31 },
+        { range: '31-35', count: 42, percentage: 27 },
+        { range: '36-40', count: 28, percentage: 18 },
+        { range: '41+', count: 13, percentage: 8 }
+      ],
+      gender: [
+        { type: 'Male', count: 89, percentage: 57 },
+        { type: 'Female', count: 67, percentage: 43 }
+      ],
+      experience: [
+        { range: '0-2 years', count: 35, percentage: 22 },
+        { range: '3-5 years', count: 52, percentage: 33 },
+        { range: '6-10 years', count: 45, percentage: 29 },
+        { range: '10+ years', count: 24, percentage: 16 }
+      ]
+    };
+
+    res.json({ data: demographics });
+  } catch (error) {
+    console.error('Get demographics error:', error);
+    res.status(500).json({ message: 'Error fetching demographics data' });
+  }
+});
+
+app.get('/api/analytics/employee/turnover', authenticateToken, (req, res) => {
+  try {
+    // Check if user has admin or HR manager role
+    if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
+      return res.status(403).json({ message: 'Not authorized to view analytics' });
+    }
+
+    const { period } = req.query;
+    
+    // Mock turnover data based on period
+    let turnoverData;
+    
+    if (period === '3months') {
+      turnoverData = {
+        currentRate: 8.5,
+        trend: -2.1,
+        months: ['Oct 2023', 'Nov 2023', 'Dec 2023'],
+        rates: [10.2, 9.1, 8.5],
+        industryAverage: [12.0, 12.0, 12.0]
+      };
+    } else if (period === '6months') {
+      turnoverData = {
+        currentRate: 8.5,
+        trend: -1.8,
+        months: ['Jul 2023', 'Aug 2023', 'Sep 2023', 'Oct 2023', 'Nov 2023', 'Dec 2023'],
+        rates: [11.2, 10.8, 10.5, 10.2, 9.1, 8.5],
+        industryAverage: [12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
+      };
+    } else {
+      turnoverData = {
+        currentRate: 8.5,
+        trend: -3.2,
+        months: ['Jan 2023', 'Feb 2023', 'Mar 2023', 'Apr 2023', 'May 2023', 'Jun 2023', 'Jul 2023', 'Aug 2023', 'Sep 2023', 'Oct 2023', 'Nov 2023', 'Dec 2023'],
+        rates: [15.2, 14.8, 13.5, 12.2, 11.8, 11.5, 11.2, 10.8, 10.5, 10.2, 9.1, 8.5],
+        industryAverage: [12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
+      };
+    }
+
+    res.json({ data: turnoverData });
+  } catch (error) {
+    console.error('Get turnover error:', error);
+    res.status(500).json({ message: 'Error fetching turnover data' });
+  }
+});
+
+app.get('/api/analytics/employee/headcount-trends', authenticateToken, (req, res) => {
+  try {
+    // Check if user has admin or HR manager role
+    if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
+      return res.status(403).json({ message: 'Not authorized to view analytics' });
+    }
+
+    const { period } = req.query;
+    
+    // Mock headcount data based on period
+    let headcountData;
+    
+    if (period === '3months') {
+      headcountData = {
+        months: ['Oct 2023', 'Nov 2023', 'Dec 2023'],
+        total: [148, 152, 156],
+        newHires: [8, 6, 7],
+        departures: [4, 2, 3]
+      };
+    } else if (period === '6months') {
+      headcountData = {
+        months: ['Jul 2023', 'Aug 2023', 'Sep 2023', 'Oct 2023', 'Nov 2023', 'Dec 2023'],
+        total: [135, 140, 144, 148, 152, 156],
+        newHires: [10, 8, 6, 8, 6, 7],
+        departures: [5, 3, 2, 4, 2, 3]
+      };
+    } else {
+      headcountData = {
+        months: ['Jan 2023', 'Feb 2023', 'Mar 2023', 'Apr 2023', 'May 2023', 'Jun 2023', 'Jul 2023', 'Aug 2023', 'Sep 2023', 'Oct 2023', 'Nov 2023', 'Dec 2023'],
+        total: [120, 118, 122, 125, 128, 132, 135, 140, 144, 148, 152, 156],
+        newHires: [5, 3, 8, 6, 7, 9, 10, 8, 6, 8, 6, 7],
+        departures: [7, 5, 4, 3, 4, 5, 5, 3, 2, 4, 2, 3]
+      };
+    }
+
+    res.json({ data: headcountData });
+  } catch (error) {
+    console.error('Get headcount trends error:', error);
+    res.status(500).json({ message: 'Error fetching headcount trends data' });
+  }
+});
+
+app.get('/api/analytics/employee/satisfaction', authenticateToken, (req, res) => {
+  try {
+    // Check if user has admin or HR manager role
+    if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
+      return res.status(403).json({ message: 'Not authorized to view analytics' });
+    }
+
+    // Mock satisfaction data
+    const satisfactionData = {
+      averageScore: 4.2,
+      improvement: 8.5,
+      categories: [
+        { name: 'Work-Life Balance', score: 4.1 },
+        { name: 'Career Growth', score: 3.9 },
+        { name: 'Compensation', score: 4.3 },
+        { name: 'Management', score: 4.0 },
+        { name: 'Work Environment', score: 4.5 }
+      ],
+      trends: {
+        months: ['Aug 2023', 'Sep 2023', 'Oct 2023', 'Nov 2023', 'Dec 2023'],
+        scores: [3.8, 3.9, 4.0, 4.1, 4.2]
+      }
+    };
+
+    res.json({ data: satisfactionData });
+  } catch (error) {
+    console.error('Get satisfaction error:', error);
+    res.status(500).json({ message: 'Error fetching satisfaction data' });
+  }
+});
+
+// Attendance Analytics endpoints
+app.get('/api/analytics/attendance/patterns', authenticateToken, (req, res) => {
+  try {
+    // Check if user has admin or HR manager role
+    if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
+      return res.status(403).json({ message: 'Not authorized to view analytics' });
+    }
+
+    // Mock attendance patterns data
+    const patternsData = {
+      dailyPatterns: {
+        days: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+        attendanceRates: [92, 95, 96, 94, 89]
+      },
+      monthlyTrends: {
+        months: ['Aug 2023', 'Sep 2023', 'Oct 2023', 'Nov 2023', 'Dec 2023'],
+        rates: [91, 93, 95, 94, 92]
+      },
+      departmentWise: [
+        { department: 'Engineering', rate: 96 },
+        { department: 'Sales', rate: 89 },
+        { department: 'Marketing', rate: 92 },
+        { department: 'HR', rate: 98 },
+        { department: 'Finance', rate: 94 }
+      ]
+    };
+
+    res.json({ data: patternsData });
+  } catch (error) {
+    console.error('Get attendance patterns error:', error);
+    res.status(500).json({ message: 'Error fetching attendance patterns data' });
+  }
+});
+
+// Get next available Employee ID endpoint
+app.get('/api/employees/next-id/:role', authenticateToken, async (req, res) => {
+  try {
+    // Check if user has admin or HR manager role
+    if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
+      return res.status(403).json({ message: 'Not authorized to get employee IDs' });
+    }
+
+    const { role } = req.params;
+    
+    // Validate role
+    const validRoles = ['employee', 'hr_manager', 'admin'];
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({ message: 'Invalid role specified' });
+    }
+
+    // Get role prefix
+    let prefix;
+    switch (role) {
+      case 'employee':
+        prefix = 'EMP';
+        break;
+      case 'hr_manager':
+        prefix = 'HRM';
+        break;
+      case 'admin':
+        prefix = 'ADM';
+        break;
+      default:
+        prefix = 'USR';
+    }
+
+    // Find the next available number for this role
+    let nextNumber = 1;
+    let employeeCode;
+    let isUnique = false;
+    
+    while (!isUnique) {
+      employeeCode = `${prefix}${nextNumber.toString().padStart(4, '0')}`;
+      
+      // Check if this ID already exists
+      const existingUser = await User.findOne({ employeeCode });
+      if (!existingUser) {
+        isUnique = true;
+      } else {
+        nextNumber++;
+      }
+    }
+
+    res.json({ 
+      employeeCode,
+      role,
+      prefix,
+      nextNumber
+    });
+  } catch (error) {
+    console.error('Get next employee ID error:', error);
+    res.status(500).json({ message: 'Error generating employee ID' });
+  }
+});
+
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'OK', message: 'HRM Server is running' });
+});
+
+// Default route
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'HRM System API Server',
-    version: '1.0.0',
+    message: 'HRM System API Server - Consolidated User Model',
+    version: '2.0.0',
+    note: 'All users (admin, hr_manager, employee) are now stored in a single User collection',
     endpoints: [
       'POST /api/auth/login',
       'GET /api/auth/me',
@@ -627,7 +1493,11 @@ app.get('/', (req, res) => {
       'GET /api/employees',
       'GET /api/employees/:id',
       'PUT /api/employees/:id',
-      'DELETE /api/employees/:id'
+      'DELETE /api/employees/:id',
+      'GET /api/analytics/employee/demographics',
+      'GET /api/analytics/employee/turnover',
+      'GET /api/analytics/employee/headcount-trends',
+      'GET /api/analytics/employee/satisfaction'
     ]
   });
 });
@@ -648,6 +1518,7 @@ app.listen(PORT, () => {
   console.log(`📍 API URL: http://localhost:${PORT}`);
   console.log(`🔐 Available test accounts:`);
   console.log(`   Admin: admin@hrm.com / admin123`);
-  console.log(`   HR: hr@hrm.com / hr123`);
-  console.log(`   Employee: employee@hrm.com / emp123`);
+  console.log(`   HR: hr@hrm.com / hr123456`);
+  console.log(`📦 Database: Using consolidated User model for all users`);
+  console.log(`✅ Analytics & Reporting system active`);
 });

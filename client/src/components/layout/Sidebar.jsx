@@ -14,7 +14,8 @@ import {
   ChevronRightIcon,
   ExclamationTriangleIcon,
   DocumentTextIcon,
-  BuildingOfficeIcon
+  BuildingOfficeIcon,
+  PresentationChartLineIcon
 } from '@heroicons/react/24/outline';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
@@ -33,6 +34,14 @@ const Sidebar = ({ open, setOpen }) => {
     { name: 'Request History', href: '/request-history', icon: ClockIcon, roles: ['admin', 'hr', 'hr_manager', 'employee'] },
     { name: 'Payroll', href: '/payroll', icon: CurrencyDollarIcon, roles: ['admin', 'hr', 'hr_manager'] },
     { name: 'Reports', href: '/reports', icon: ChartBarIcon, roles: ['admin', 'hr', 'hr_manager'] },
+    { 
+      name: 'Analytics', 
+      icon: PresentationChartLineIcon, 
+      roles: ['admin', 'hr_manager'],
+      subItems: [
+        { name: 'Employee Analytics', href: '/analytics/employee', icon: UsersIcon, roles: ['admin', 'hr_manager'] }
+      ]
+    },
     { 
       name: 'Management', 
       icon: BuildingOfficeIcon, 
