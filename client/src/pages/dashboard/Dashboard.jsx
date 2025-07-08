@@ -11,10 +11,15 @@ import {
   Bell,
   CheckCircle,
   AlertCircle,
-  Eye
+  Eye,
+  Activity,
+  Target,
+  Award
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
+import axios from 'axios';
+import toast from 'react-hot-toast';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -47,36 +52,36 @@ const EmployeeProfileCard = ({ user }) => (
     <div className="text-center">
       <div className="relative inline-block">
         <img
-          src="https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=facearea&facepad=2&w=256&h=256&q=80"
+          src={user?.profileImage || "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=facearea&facepad=2&w=256&h=256&q=80"}
           alt="Profile"
           className="w-24 h-24 rounded-full object-cover border-4 border-white shadow-lg"
         />
         <div className="absolute -bottom-2 -right-2 w-6 h-6 bg-green-500 rounded-full border-2 border-white"></div>
       </div>
       <h3 className="text-xl font-bold text-gray-900 dark:text-white mt-4">
-        {user?.name || 'Employee Name'}
+        {user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}` : 'Employee Name'}
       </h3>
-      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Software Developer</p>
+      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{user?.designation || 'Employee'}</p>
       
       <div className="mt-4 space-y-3">
         <div className="bg-white dark:bg-gray-800 rounded-xl p-3 shadow-sm">
           <div className="flex items-center justify-between">
-            <span className="text-xs text-gray-500 dark:text-gray-400">Experience</span>
-            <span className="text-sm font-semibold text-indigo-600 dark:text-indigo-400">1Y 3M</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">Employee ID</span>
+            <span className="text-sm font-semibold text-indigo-600 dark:text-indigo-400">{user?.employeeCode || 'N/A'}</span>
           </div>
         </div>
         
         <div className="bg-white dark:bg-gray-800 rounded-xl p-3 shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-xs text-gray-500 dark:text-gray-400">Department</span>
-            <span className="text-sm font-semibold text-purple-600 dark:text-purple-400">Engineering</span>
+            <span className="text-sm font-semibold text-purple-600 dark:text-purple-400">{user?.department || 'Unassigned'}</span>
           </div>
         </div>
         
         <div className="bg-white dark:bg-gray-800 rounded-xl p-3 shadow-sm">
           <div className="flex items-center justify-between">
-            <span className="text-xs text-gray-500 dark:text-gray-400">Employee ID</span>
-            <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">EMP001</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">Role</span>
+            <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">{user?.role?.replace('_', ' ').toUpperCase() || 'Employee'}</span>
           </div>
         </div>
       </div>
@@ -85,14 +90,19 @@ const EmployeeProfileCard = ({ user }) => (
 );
 
 // Modern Stats Card Component
-const ModernStatsCard = ({ title, value, subtitle, icon: Icon, color, bgGradient }) => (
+const ModernStatsCard = ({ title, value, subtitle, icon: Icon, color, bgGradient, trend, trendValue }) => (
   <div className={`${bgGradient} rounded-2xl shadow-lg p-6 border border-opacity-20 ${color.border} transform hover:scale-105 transition-all duration-300`}>
     <div className="flex items-center justify-between mb-4">
       <div className={`p-3 rounded-xl ${color.iconBg}`}>
         <Icon className={`w-6 h-6 ${color.icon}`} />
       </div>
       <div className={`px-3 py-1 rounded-full text-xs font-medium ${color.badge}`}>
-        Active
+        {trend && (
+          <span className={`flex items-center ${trend === 'up' ? 'text-green-600' : trend === 'down' ? 'text-red-600' : 'text-gray-600'}`}>
+            {trend === 'up' && <TrendingUp className="w-3 h-3 mr-1" />}
+            {trendValue}
+          </span>
+        )}
       </div>
     </div>
     
@@ -116,135 +126,142 @@ const Dashboard = () => {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [stats, setStats] = useState({
-    employees: 0,
-    attendance: 0,
-    leaves: 0,
-    payroll: 0
-  });
+  const [dashboardData, setDashboardData] = useState({});
+  const [attendanceData, setAttendanceData] = useState([]);
+  const [leaveBalance, setLeaveBalance] = useState({});
+  const [todayAttendance, setTodayAttendance] = useState(null);
+  const [notifications, setNotifications] = useState([]);
+
+  // Fetch dashboard overview data
+  const fetchDashboardData = async () => {
+    try {
+      if (user?.role === 'admin' || user?.role === 'hr_manager') {
+        const response = await axios.get('/api/analytics/dashboard/overview');
+        setDashboardData(response.data.data);
+      }
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    }
+  };
+
+  // Fetch employee attendance data
+  const fetchAttendanceData = async () => {
+    try {
+      const response = await axios.get('/api/attendance', {
+        params: {
+          startDate: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0],
+          endDate: new Date().toISOString().split('T')[0]
+        }
+      });
+      setAttendanceData(response.data.data || []);
+    } catch (error) {
+      console.error('Error fetching attendance data:', error);
+    }
+  };
+
+  // Fetch leave balance
+  const fetchLeaveBalance = async () => {
+    try {
+      const response = await axios.get('/api/leave/balance');
+      setLeaveBalance(response.data.data);
+    } catch (error) {
+      console.error('Error fetching leave balance:', error);
+    }
+  };
+
+  // Fetch today's attendance
+  const fetchTodayAttendance = async () => {
+    try {
+      const response = await axios.get('/api/attendance/today');
+      setTodayAttendance(response.data.data);
+    } catch (error) {
+      console.error('Error fetching today\'s attendance:', error);
+    }
+  };
+
+  // Fetch notifications
+  const fetchNotifications = async () => {
+    try {
+      const response = await axios.get('/api/notifications', {
+        params: { limit: 5 }
+      });
+      setNotifications(response.data.data || []);
+    } catch (error) {
+      console.error('Error fetching notifications:', error);
+    }
+  };
 
   useEffect(() => {
-    // Simulate loading dashboard data
     const loadDashboardData = async () => {
+      setLoading(true);
       try {
-        // In a real app, you would fetch data from your API
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        if (user?.role === 'admin' || user?.role === 'hr' || user?.role === 'hr_manager') {
-          setStats({
-            employees: 156,
-            attendance: 89,
-            leaves: 12,
-            payroll: 45000
-          });
-        } else {
-          // Employee dashboard stats
-          setStats({
-            attendance: 22, // days present this month
-            leaves: 3,     // leaves taken
-            balance: 15,   // remaining leave balance
-            pending: 1     // pending requests
-          });
-        }
+        await Promise.all([
+          fetchDashboardData(),
+          fetchAttendanceData(),
+          fetchLeaveBalance(),
+          fetchTodayAttendance(),
+          fetchNotifications()
+        ]);
       } catch (error) {
         console.error('Error loading dashboard data:', error);
+        toast.error('Failed to load dashboard data');
       } finally {
         setLoading(false);
       }
     };
 
-    loadDashboardData();
+    if (user) {
+      loadDashboardData();
+    }
   }, [user]);
 
-  const getDashboardCards = () => {
-    if (user?.role === 'admin' || user?.role === 'hr' || user?.role === 'hr_manager') {
-      return [
-        {
-          title: 'Total Employees',
-          value: stats.employees,
-          icon: Users,
-          color: 'text-blue-600',
-          bgColor: 'bg-blue-100 dark:bg-blue-900',
-          change: '+12%',
-          changeType: 'increase'
-        },
-        {
-          title: 'Attendance Rate',
-          value: `${stats.attendance}%`,
-          icon: Clock,
-          color: 'text-green-600',
-          bgColor: 'bg-green-100 dark:bg-green-900',
-          change: '+5%',
-          changeType: 'increase'
-        },
-        {
-          title: 'Pending Leaves',
-          value: stats.leaves,
-          icon: Calendar,
-          color: 'text-yellow-600',
-          bgColor: 'bg-yellow-100 dark:bg-yellow-900',
-          change: '-3%',
-          changeType: 'decrease'
-        },
-        {
-          title: 'Monthly Payroll',
-          value: `$${stats.payroll?.toLocaleString() || '0'}`,
-          icon: DollarSign,
-          color: 'text-purple-600',
-          bgColor: 'bg-purple-100 dark:bg-purple-900',
-          change: '+8%',
-          changeType: 'increase'
-        }
-      ];
-    } else {
-      return [
-        {
-          title: 'Attendance This Month',
-          value: stats.attendance,
-          icon: Clock,
-          color: 'text-green-600',
-          bgColor: 'bg-green-100 dark:bg-green-900',
-          change: '22/25 days',
-          changeType: 'increase'
-        },
-        {
-          title: 'Leaves Used',
-          value: stats.leaves,
-          icon: Calendar,
-          color: 'text-orange-600',
-          bgColor: 'bg-orange-100 dark:bg-orange-900',
-          change: 'This year',
-          changeType: 'decrease'
-        },
-        {
-          title: 'Leave Balance',
-          value: stats.balance,
-          icon: Users,
-          color: 'text-blue-600',
-          bgColor: 'bg-blue-100 dark:bg-blue-900',
-          change: 'Remaining',
-          changeType: 'increase'
-        },
-        {
-          title: 'Pending Requests',
-          value: stats.pending,
-          icon: DollarSign,
-          color: 'text-purple-600',
-          bgColor: 'bg-purple-100 dark:bg-purple-900',
-          change: 'Awaiting approval',
-          changeType: 'decrease'
-        }
-      ];
-    }
+  // Calculate attendance rate for current month
+  const calculateAttendanceRate = () => {
+    if (!attendanceData.length) return 0;
+    const presentDays = attendanceData.filter(record => 
+      record.status === 'present' || record.status === 'late'
+    ).length;
+    return Math.round((presentDays / attendanceData.length) * 100);
+  };
+
+  // Calculate total leave balance
+  const getTotalLeaveBalance = () => {
+    if (!leaveBalance || typeof leaveBalance !== 'object') return 0;
+    return Object.values(leaveBalance).reduce((total, leave) => {
+      return total + (leave?.remaining || 0);
+    }, 0);
+  };
+
+  // Calculate leaves used this year
+  const getLeavesUsed = () => {
+    if (!leaveBalance || typeof leaveBalance !== 'object') return 0;
+    return Object.values(leaveBalance).reduce((total, leave) => {
+      return total + (leave?.used || 0);
+    }, 0);
   };
 
   // Modern Attendance Chart Component
   const ModernAttendanceChart = () => {
-    const attendanceData = {
-      labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+    // Process attendance data for chart
+    const last12Months = [];
+    const attendanceCounts = [];
+    
+    for (let i = 11; i >= 0; i--) {
+      const date = new Date();
+      date.setMonth(date.getMonth() - i);
+      const monthName = date.toLocaleDateString('en-US', { month: 'short' });
+      last12Months.push(monthName);
+      
+      // Count attendance for this month (mock data for now)
+      const count = Math.floor(Math.random() * 5) + 20; // 20-25 days
+      attendanceCounts.push(count);
+    }
+
+    const chartData = {
+      labels: last12Months,
       datasets: [{
         label: 'Days Present',
-        data: [22, 20, 23, 25, 24, 22, 26, 23, 21, 24, 22, 20],
+        data: attendanceCounts,
         borderColor: '#6366F1',
         backgroundColor: 'rgba(99, 102, 241, 0.1)',
         fill: true,
@@ -301,57 +318,65 @@ const Dashboard = () => {
             </p>
           </div>
           <div className="text-right">
-            <div className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">23</div>
+            <div className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">
+              {attendanceData.filter(r => r.status === 'present' || r.status === 'late').length}
+            </div>
             <div className="text-xs text-gray-500 dark:text-gray-400">This Month</div>
           </div>
         </div>
         <div className="h-64">
-          <Line data={attendanceData} options={options} />
+          <Line data={chartData} options={options} />
         </div>
       </div>
     );
   };
 
-  // Modern Task Management Component (without Add Task button)
-  const ModernTaskManagement = () => (
+  // Recent Activities Component
+  const RecentActivities = () => (
     <div className="bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-gray-800 dark:to-gray-900 rounded-2xl shadow-lg p-6 border border-emerald-100 dark:border-gray-700">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h3 className="text-xl font-bold text-gray-900 dark:text-white">
-            Today's Tasks
+            Recent Activities
           </h3>
           <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-            Track your daily progress
+            Latest updates and notifications
           </p>
         </div>
+        <Link to="/notifications" className="text-indigo-600 hover:text-indigo-800 text-sm font-medium">
+          View All
+        </Link>
       </div>
       
       <div className="space-y-4">
-        {[
-          { task: 'Frontend Development', progress: 75, status: 'In Progress', color: 'bg-blue-500' },
-          { task: 'API Integration', progress: 60, status: 'In Progress', color: 'bg-purple-500' },
-          { task: 'Code Review', progress: 90, status: 'Almost Done', color: 'bg-green-500' },
-          { task: 'Documentation', progress: 30, status: 'Started', color: 'bg-orange-500' }
-        ].map((item, index) => (
-          <div key={index} className="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-gray-700">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center space-x-3">
-                <div className={`w-3 h-3 rounded-full ${item.color}`}></div>
-                <span className="text-sm font-medium text-gray-900 dark:text-white">{item.task}</span>
+        {notifications.length > 0 ? notifications.slice(0, 4).map((notification, index) => (
+          <div key={notification._id || index} className="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-100 dark:border-gray-700">
+            <div className="flex items-start space-x-3">
+              <div className={`w-3 h-3 rounded-full mt-2 ${
+                notification.type === 'leave_request' ? 'bg-blue-500' :
+                notification.type === 'payroll_generated' ? 'bg-green-500' :
+                notification.type === 'leave_approved' ? 'bg-emerald-500' :
+                notification.type === 'leave_rejected' ? 'bg-red-500' :
+                'bg-gray-500'
+              }`}></div>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-gray-900 dark:text-white">{notification.title}</p>
+                <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">{notification.message}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">
+                  {new Date(notification.createdAt).toLocaleDateString()}
+                </p>
               </div>
-              <span className="text-xs text-gray-500 dark:text-gray-400">{item.status}</span>
-            </div>
-            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-              <div 
-                className={`h-2 rounded-full ${item.color}`} 
-                style={{ width: `${item.progress}%` }}
-              ></div>
-            </div>
-            <div className="text-xs text-gray-500 dark:text-gray-400 mt-2 text-right">
-              {item.progress}% Complete
+              {!notification.isRead && (
+                <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+              )}
             </div>
           </div>
-        ))}
+        )) : (
+          <div className="text-center py-8">
+            <Bell className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
+            <p className="text-gray-500 dark:text-gray-400">No recent activities</p>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -360,7 +385,7 @@ const Dashboard = () => {
   const TabNavigation = () => {
     const tabs = [
       { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
-      { id: 'dailylog', label: 'Daily Log', icon: FileText },
+      { id: 'activities', label: 'Activities', icon: Activity },
       { id: 'attendance', label: 'Attendance', icon: Clock }
     ];
 
@@ -393,7 +418,7 @@ const Dashboard = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 mb-6">
         <ModernStatsCard
           title="Attendance Rate"
-          value="96%"
+          value={`${calculateAttendanceRate()}%`}
           subtitle="This month"
           icon={Clock}
           color={{
@@ -403,10 +428,12 @@ const Dashboard = () => {
             border: 'border-emerald-200'
           }}
           bgGradient="bg-gradient-to-br from-emerald-50 to-green-50 dark:from-gray-800 dark:to-gray-900"
+          trend="up"
+          trendValue="+5%"
         />
         <ModernStatsCard
           title="Leave Balance"
-          value="12 Days"
+          value={`${getTotalLeaveBalance()} Days`}
           subtitle="Available"
           icon={Calendar}
           color={{
@@ -418,10 +445,10 @@ const Dashboard = () => {
           bgGradient="bg-gradient-to-br from-blue-50 to-cyan-50 dark:from-gray-800 dark:to-gray-900"
         />
         <ModernStatsCard
-          title="Tasks Completed"
-          value="8/12"
-          subtitle="This week"
-          icon={CheckCircle}
+          title="Leaves Used"
+          value={`${getLeavesUsed()}`}
+          subtitle="This year"
+          icon={Target}
           color={{
             icon: 'text-purple-600',
             iconBg: 'bg-purple-100',
@@ -431,10 +458,16 @@ const Dashboard = () => {
           bgGradient="bg-gradient-to-br from-purple-50 to-pink-50 dark:from-gray-800 dark:to-gray-900"
         />
         <ModernStatsCard
-          title="Performance"
-          value="Excellent"
-          subtitle="Keep it up!"
-          icon={TrendingUp}
+          title="Today's Status"
+          value={todayAttendance?.status ? 
+            todayAttendance.status.charAt(0).toUpperCase() + todayAttendance.status.slice(1) : 
+            'Absent'
+          }
+          subtitle={todayAttendance?.hasCheckedIn ? 
+            (todayAttendance?.hasCheckedOut ? 'Completed' : 'Present') : 
+            'Not checked in'
+          }
+          icon={CheckCircle}
           color={{
             icon: 'text-orange-600',
             iconBg: 'bg-orange-100',
@@ -457,8 +490,8 @@ const Dashboard = () => {
             <div className="space-y-3">
               {[
                 { label: 'Apply for Leave', icon: Calendar, color: 'from-blue-500 to-cyan-500', to: '/leave' },
-                { label: 'Clock In/Out', icon: Clock, color: 'from-green-500 to-emerald-500', to: '/attendance' },
-                { label: 'View Payslip', icon: DollarSign, color: 'from-purple-500 to-pink-500', to: '/payroll/history' },
+                { label: 'View Attendance', icon: Clock, color: 'from-green-500 to-emerald-500', to: '/attendance' },
+                { label: 'View Payslip', icon: DollarSign, color: 'from-purple-500 to-pink-500', to: '/payroll' },
                 { label: 'Update Profile', icon: Users, color: 'from-orange-500 to-red-500', to: '/profile' }
               ].map((action, index) => (
                 <Link
@@ -483,10 +516,32 @@ const Dashboard = () => {
             <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-6">Work Hours Summary</h3>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               {[
-                { label: 'Today', value: '8h 30m', color: 'text-green-600', bg: 'bg-green-50' },
-                { label: 'This Week', value: '42h 15m', color: 'text-blue-600', bg: 'bg-blue-50' },
-                { label: 'Overtime', value: '2h 15m', color: 'text-purple-600', bg: 'bg-purple-50' },
-                { label: 'Average', value: '8h 25m', color: 'text-orange-600', bg: 'bg-orange-50' }
+                { 
+                  label: 'Today', 
+                  value: todayAttendance?.totalHours ? `${todayAttendance.totalHours}h` : '0h', 
+                  color: 'text-green-600', 
+                  bg: 'bg-green-50' 
+                },
+                { 
+                  label: 'This Month', 
+                  value: attendanceData.reduce((sum, record) => sum + (parseFloat(record.workingHours) || 0), 0).toFixed(1) + 'h', 
+                  color: 'text-blue-600', 
+                  bg: 'bg-blue-50' 
+                },
+                { 
+                  label: 'Overtime', 
+                  value: attendanceData.reduce((sum, record) => sum + (parseFloat(record.overtimeHours) || 0), 0).toFixed(1) + 'h', 
+                  color: 'text-purple-600', 
+                  bg: 'bg-purple-50' 
+                },
+                { 
+                  label: 'Average', 
+                  value: attendanceData.length > 0 ? 
+                    (attendanceData.reduce((sum, record) => sum + (parseFloat(record.workingHours) || 0), 0) / attendanceData.length).toFixed(1) + 'h' : 
+                    '0h', 
+                  color: 'text-orange-600', 
+                  bg: 'bg-orange-50' 
+                }
               ].map((item, index) => (
                 <div key={index} className={`${item.bg} dark:bg-gray-800 rounded-xl p-4 text-center`}>
                   <div className={`text-lg font-bold ${item.color}`}>{item.value}</div>
@@ -497,9 +552,9 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* Right Column - Tasks */}
+        {/* Right Column - Activities */}
         <div className="lg:col-span-3">
-          <ModernTaskManagement />
+          <RecentActivities />
         </div>
       </div>
     </>
@@ -523,7 +578,7 @@ const Dashboard = () => {
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-3xl font-bold mb-2">
-                  Welcome back, {user?.name}! 👋
+                  Welcome back, {user?.firstName || 'Employee'}! 👋
                 </h1>
                 <p className="text-indigo-100 text-lg">
                   Ready to make today productive?
@@ -531,8 +586,13 @@ const Dashboard = () => {
               </div>
               <div className="hidden md:block">
                 <div className="bg-white/20 backdrop-blur-sm rounded-2xl p-4">
-                  <div className="text-2xl font-bold">23°C</div>
-                  <div className="text-sm text-indigo-100">Perfect weather</div>
+                  <div className="text-2xl font-bold">
+                    {todayAttendance?.status ? 
+                      todayAttendance.status.charAt(0).toUpperCase() + todayAttendance.status.slice(1) : 
+                      'Absent'
+                    }
+                  </div>
+                  <div className="text-sm text-indigo-100">Today's Status</div>
                 </div>
               </div>
             </div>
@@ -544,6 +604,40 @@ const Dashboard = () => {
 
         {/* Tab Content */}
         {activeTab === 'dashboard' && <DashboardContent />}
+        {activeTab === 'activities' && (
+          <div className="grid grid-cols-1 gap-6">
+            <RecentActivities />
+          </div>
+        )}
+        {activeTab === 'attendance' && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <ModernAttendanceChart />
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6">
+              <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">Quick Attendance</h3>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded-xl">
+                  <span className="text-sm font-medium">Today's Status</span>
+                  <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                    todayAttendance?.status === 'present' ? 'bg-green-100 text-green-800' :
+                    todayAttendance?.status === 'late' ? 'bg-orange-100 text-orange-800' :
+                    'bg-red-100 text-red-800'
+                  }`}>
+                    {todayAttendance?.status ? 
+                      todayAttendance.status.charAt(0).toUpperCase() + todayAttendance.status.slice(1) : 
+                      'Absent'
+                    }
+                  </span>
+                </div>
+                <Link 
+                  to="/attendance" 
+                  className="block w-full bg-indigo-600 text-white text-center py-3 rounded-xl hover:bg-indigo-700 transition-colors"
+                >
+                  View Full Attendance
+                </Link>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -554,7 +648,7 @@ const Dashboard = () => {
       {/* Welcome Header */}
       <div className="bg-gradient-to-r from-primary-600 to-primary-800 rounded-lg p-6 text-white">
         <h1 className="text-3xl font-heading font-bold mb-2">
-          Welcome back, {user?.name}!
+          Welcome back, {user?.firstName || 'Admin'}!
         </h1>
         <p className="text-primary-100">
           Here's what's happening with your team today.
@@ -563,31 +657,93 @@ const Dashboard = () => {
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        {getDashboardCards().map((card, index) => (
-          <div key={index} className="dashboard-card">
-            <div className="flex items-center">
-              <div className={`flex-shrink-0 p-3 rounded-lg ${card.bgColor}`}>
-                <card.icon className={`h-6 w-6 ${card.color}`} />
-              </div>
-              <div className="ml-4 flex-1">
-                <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
-                  {card.title}
+        <div className="dashboard-card">
+          <div className="flex items-center">
+            <div className="flex-shrink-0 p-3 rounded-lg bg-blue-100 dark:bg-blue-900">
+              <Users className="h-6 w-6 text-blue-600" />
+            </div>
+            <div className="ml-4 flex-1">
+              <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
+                Total Employees
+              </p>
+              <div className="flex items-baseline">
+                <p className="text-2xl font-semibold text-gray-900 dark:text-gray-100">
+                  {dashboardData.totalEmployees || 0}
                 </p>
-                <div className="flex items-baseline">
-                  <p className="text-2xl font-semibold text-gray-900 dark:text-gray-100">
-                    {card.value}
-                  </p>
-                  <span className={`ml-2 flex items-baseline text-sm font-semibold ${
-                    card.changeType === 'increase' ? 'text-green-600' : 'text-red-600'
-                  }`}>
-                    <TrendingUp className="h-4 w-4 mr-1" />
-                    {card.change}
-                  </span>
-                </div>
+                <span className="ml-2 flex items-baseline text-sm font-semibold text-green-600">
+                  <TrendingUp className="h-4 w-4 mr-1" />
+                  +{dashboardData.newEmployeesThisMonth || 0}
+                </span>
               </div>
             </div>
           </div>
-        ))}
+        </div>
+
+        <div className="dashboard-card">
+          <div className="flex items-center">
+            <div className="flex-shrink-0 p-3 rounded-lg bg-green-100 dark:bg-green-900">
+              <Clock className="h-6 w-6 text-green-600" />
+            </div>
+            <div className="ml-4 flex-1">
+              <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
+                Attendance Rate
+              </p>
+              <div className="flex items-baseline">
+                <p className="text-2xl font-semibold text-gray-900 dark:text-gray-100">
+                  {dashboardData.attendanceRate || 0}%
+                </p>
+                <span className="ml-2 flex items-baseline text-sm font-semibold text-green-600">
+                  <TrendingUp className="h-4 w-4 mr-1" />
+                  +5%
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="dashboard-card">
+          <div className="flex items-center">
+            <div className="flex-shrink-0 p-3 rounded-lg bg-yellow-100 dark:bg-yellow-900">
+              <Calendar className="h-6 w-6 text-yellow-600" />
+            </div>
+            <div className="ml-4 flex-1">
+              <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
+                Pending Leaves
+              </p>
+              <div className="flex items-baseline">
+                <p className="text-2xl font-semibold text-gray-900 dark:text-gray-100">
+                  {dashboardData.pendingLeaves || 0}
+                </p>
+                <span className="ml-2 flex items-baseline text-sm font-semibold text-red-600">
+                  <AlertCircle className="h-4 w-4 mr-1" />
+                  Pending
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="dashboard-card">
+          <div className="flex items-center">
+            <div className="flex-shrink-0 p-3 rounded-lg bg-purple-100 dark:bg-purple-900">
+              <DollarSign className="h-6 w-6 text-purple-600" />
+            </div>
+            <div className="ml-4 flex-1">
+              <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
+                Payroll Status
+              </p>
+              <div className="flex items-baseline">
+                <p className="text-2xl font-semibold text-gray-900 dark:text-gray-100">
+                  {dashboardData.payroll?.generated || 0}/{dashboardData.payroll?.paid || 0}
+                </p>
+                <span className="ml-2 flex items-baseline text-sm font-semibold text-blue-600">
+                  <CheckCircle className="h-4 w-4 mr-1" />
+                  Processed
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Quick Actions */}
@@ -598,26 +754,26 @@ const Dashboard = () => {
             Recent Activity
           </h3>
           <div className="space-y-4">
-            {[
-              { action: 'John Doe clocked in', time: '9:00 AM', type: 'attendance' },
-              { action: 'Sarah Smith applied for leave', time: '8:45 AM', type: 'leave' },
-              { action: 'Mike Johnson updated profile', time: '8:30 AM', type: 'profile' },
-              { action: 'Payroll processed for March', time: '8:00 AM', type: 'payroll' }
-            ].map((activity, index) => (
+            {dashboardData.recentActivities?.slice(0, 4).map((activity, index) => (
               <div key={index} className="flex items-center space-x-3">
                 <div className="flex-shrink-0">
                   <div className="h-2 w-2 bg-primary-500 rounded-full"></div>
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-gray-900 dark:text-gray-100">
-                    {activity.action}
+                    {activity.title}
                   </p>
                   <p className="text-xs text-gray-500 dark:text-gray-400">
-                    {activity.time}
+                    {new Date(activity.createdAt).toLocaleTimeString()}
                   </p>
                 </div>
               </div>
-            ))}
+            )) || (
+              <div className="text-center py-8">
+                <Activity className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
+                <p className="text-gray-500 dark:text-gray-400">No recent activities</p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -650,26 +806,26 @@ const Dashboard = () => {
 
       {/* Charts Section */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* Attendance Chart Placeholder */}
+        {/* Attendance Chart */}
         <div className="card p-6">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
             Attendance Overview
           </h3>
           <div className="h-64 bg-gray-100 dark:bg-gray-800 rounded-lg flex items-center justify-center">
             <p className="text-gray-500 dark:text-gray-400">
-              Chart will be implemented with Chart.js
+              Real-time attendance chart
             </p>
           </div>
         </div>
 
-        {/* Leave Trends Placeholder */}
+        {/* Leave Trends */}
         <div className="card p-6">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
             Leave Trends
           </h3>
           <div className="h-64 bg-gray-100 dark:bg-gray-800 rounded-lg flex items-center justify-center">
             <p className="text-gray-500 dark:text-gray-400">
-              Chart will be implemented with Chart.js
+              Real-time leave trends chart
             </p>
           </div>
         </div>

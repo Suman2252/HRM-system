@@ -150,14 +150,29 @@ const AttendanceManagement = () => {
   };
 
   const formatTime = (timeString) => {
-    if (!timeString) return '--';
+    if (!timeString || timeString === '--') return '--';
     try {
-      const time = new Date(`1970-01-01T${timeString}`);
-      return time.toLocaleTimeString('en-US', { 
-        hour: '2-digit', 
-        minute: '2-digit',
-        hour12: true 
-      });
+      // Handle different time formats
+      if (timeString.includes('T')) {
+        // ISO format
+        const time = new Date(timeString);
+        return time.toLocaleTimeString('en-US', { 
+          hour: '2-digit', 
+          minute: '2-digit',
+          hour12: true 
+        });
+      } else if (timeString.includes(':')) {
+        // Already formatted time string
+        return timeString;
+      } else {
+        // Try parsing as time only
+        const time = new Date(`1970-01-01T${timeString}`);
+        return time.toLocaleTimeString('en-US', { 
+          hour: '2-digit', 
+          minute: '2-digit',
+          hour12: true 
+        });
+      }
     } catch {
       return timeString;
     }
@@ -166,6 +181,8 @@ const AttendanceManagement = () => {
   const getDayName = (dateString) => {
     try {
       const date = new Date(dateString);
+      // Ensure we have a valid date
+      if (isNaN(date.getTime())) return '--';
       return date.toLocaleDateString('en-US', { weekday: 'long' });
     } catch {
       return '--';
@@ -175,6 +192,8 @@ const AttendanceManagement = () => {
   const formatDateDisplay = (dateString) => {
     try {
       const date = new Date(dateString);
+      // Ensure we have a valid date
+      if (isNaN(date.getTime())) return dateString;
       return date.toLocaleDateString('en-US', { 
         day: '2-digit',
         month: 'short',

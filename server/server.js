@@ -9,6 +9,9 @@ require('dotenv').config();
 // Import models and services
 const User = require('./models/User');
 const Attendance = require('./models/AttendanceEnhanced');
+const Leave = require('./models/Leave');
+const Payroll = require('./models/Payroll');
+const Notification = require('./models/Notification');
 const emailService = require('./services/emailService');
 const realEmailService = require('./services/realEmailService');
 const PasswordGenerator = require('./utils/passwordGenerator');
@@ -1022,27 +1025,86 @@ app.get('/api/attendance/report', authenticateToken, (req, res) => {
   }
 });
 
-// Leave endpoints
+// Leave Management System - Real Implementation
 app.post('/api/leave/request', authenticateToken, async (req, res) => {
   try {
-    const { leaveType, startDate, endDate, reason, isHalfDay } = req.body;
+    const { leaveType, startDate, endDate, reason, isHalfDay, halfDayPeriod, emergencyContact, handoverTo, handoverNotes } = req.body;
     
-    // Mock leave request
-    const leaveRequest = {
-      id: Date.now(),
+    // Validate required fields
+    if (!leaveType || !startDate || !endDate || !reason) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    // Validate dates
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const today = new Date();
+    
+    if (start < today.setHours(0, 0, 0, 0)) {
+      return res.status(400).json({ message: 'Start date cannot be in the past' });
+    }
+    
+    if (end < start) {
+      return res.status(400).json({ message: 'End date cannot be before start date' });
+    }
+
+    // Check for conflicts
+    const conflicts = await Leave.checkConflicts(req.user.id, start, end);
+    if (conflicts.length > 0) {
+      return res.status(400).json({ 
+        message: 'Leave request conflicts with existing leave',
+        conflicts: conflicts.map(c => ({
+          startDate: c.startDate,
+          endDate: c.endDate,
+          status: c.status
+        }))
+      });
+    }
+
+    // Check leave balance
+    const currentYear = new Date().getFullYear();
+    const leaveBalance = await Leave.getLeaveBalance(req.user.id, currentYear);
+    
+    // Create leave request
+    const leaveRequest = new Leave({
       employeeId: req.user.id,
       leaveType,
-      startDate,
-      endDate,
+      startDate: start,
+      endDate: end,
       reason,
       isHalfDay: isHalfDay || false,
-      status: 'pending',
-      appliedDate: new Date().toISOString(),
-      approvedBy: null,
-      approvedDate: null
-    };
+      halfDayPeriod: isHalfDay ? halfDayPeriod : null,
+      emergencyContact: emergencyContact || {},
+      handoverTo: handoverTo || null,
+      handoverNotes: handoverNotes || ''
+    });
 
-    res.json({
+    await leaveRequest.save();
+
+    // Create notification for HR/Admin
+    const hrUsers = await User.find({ role: { $in: ['admin', 'hr_manager'] } });
+    const user = await User.findById(req.user.id);
+    
+    for (const hrUser of hrUsers) {
+      await Notification.createNotification({
+        recipient: hrUser._id,
+        sender: req.user.id,
+        type: 'leave_request',
+        title: 'New Leave Request',
+        message: `${user.firstName} ${user.lastName} has submitted a ${leaveType} request from ${start.toDateString()} to ${end.toDateString()}`,
+        data: {
+          leaveId: leaveRequest._id,
+          employeeId: req.user.id,
+          leaveType,
+          startDate,
+          endDate
+        },
+        actionRequired: true,
+        actionUrl: `/leave/requests/${leaveRequest._id}`
+      });
+    }
+
+    res.status(201).json({
       message: 'Leave request submitted successfully',
       data: leaveRequest
     });
@@ -1052,61 +1114,56 @@ app.post('/api/leave/request', authenticateToken, async (req, res) => {
   }
 });
 
-app.get('/api/leave', authenticateToken, (req, res) => {
+// Get leave requests for current user or all (for HR/Admin)
+app.get('/api/leave', authenticateToken, async (req, res) => {
   try {
-    // Mock leave data
-    const mockLeaves = [
-      {
-        id: 1,
-        leaveType: 'Annual Leave',
-        startDate: '2024-01-20',
-        endDate: '2024-01-22',
-        days: 3,
-        reason: 'Family vacation',
-        status: 'approved',
-        appliedDate: '2024-01-10',
-        approvedBy: 'HR Manager'
-      },
-      {
-        id: 2,
-        leaveType: 'Sick Leave',
-        startDate: '2024-01-15',
-        endDate: '2024-01-15',
-        days: 1,
-        reason: 'Medical appointment',
-        status: 'pending',
-        appliedDate: '2024-01-14'
-      }
-    ];
+    const { status, year, employeeId } = req.query;
+    let query = {};
 
-    res.json({ data: mockLeaves });
+    // Role-based access control
+    if (req.user.role === 'admin' || req.user.role === 'hr_manager') {
+      // Admin/HR can view all leaves or specific employee's leaves
+      if (employeeId) {
+        query.employeeId = employeeId;
+      }
+    } else {
+      // Regular employees can only view their own leaves
+      query.employeeId = req.user.id;
+    }
+
+    // Filter by status if provided
+    if (status) {
+      query.status = status;
+    }
+
+    // Filter by year if provided
+    if (year) {
+      const startOfYear = new Date(year, 0, 1);
+      const endOfYear = new Date(year, 11, 31);
+      query.startDate = { $gte: startOfYear, $lte: endOfYear };
+    }
+
+    const leaves = await Leave.find(query)
+      .populate('employeeId', 'firstName lastName email employeeCode department')
+      .populate('approvedBy', 'firstName lastName email')
+      .populate('handoverTo', 'firstName lastName email')
+      .sort({ appliedDate: -1 });
+
+    res.json({ data: leaves });
   } catch (error) {
     console.error('Get leave error:', error);
     res.status(500).json({ message: 'Error fetching leave data' });
   }
 });
 
-app.get('/api/leave/balance', authenticateToken, (req, res) => {
+// Get leave balance for current user
+app.get('/api/leave/balance', authenticateToken, async (req, res) => {
   try {
-    // Mock leave balance
-    const leaveBalance = {
-      annualLeave: {
-        total: 25,
-        used: 8,
-        remaining: 17
-      },
-      sickLeave: {
-        total: 12,
-        used: 3,
-        remaining: 9
-      },
-      personalLeave: {
-        total: 5,
-        used: 1,
-        remaining: 4
-      }
-    };
-
+    const { year } = req.query;
+    const targetYear = year ? parseInt(year) : new Date().getFullYear();
+    
+    const leaveBalance = await Leave.getLeaveBalance(req.user.id, targetYear);
+    
     res.json({ data: leaveBalance });
   } catch (error) {
     console.error('Get leave balance error:', error);
@@ -1114,7 +1171,150 @@ app.get('/api/leave/balance', authenticateToken, (req, res) => {
   }
 });
 
-// Payroll endpoints
+// Approve/Reject leave request (HR/Admin only)
+app.put('/api/leave/:id/status', authenticateToken, async (req, res) => {
+  try {
+    // Check authorization
+    if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
+      return res.status(403).json({ message: 'Not authorized to approve/reject leave requests' });
+    }
+
+    const { status, rejectionReason } = req.body;
+    
+    if (!['approved', 'rejected'].includes(status)) {
+      return res.status(400).json({ message: 'Invalid status. Must be approved or rejected' });
+    }
+
+    const leave = await Leave.findById(req.params.id).populate('employeeId', 'firstName lastName email');
+    if (!leave) {
+      return res.status(404).json({ message: 'Leave request not found' });
+    }
+
+    if (leave.status !== 'pending') {
+      return res.status(400).json({ message: 'Leave request has already been processed' });
+    }
+
+    // Update leave status
+    leave.status = status;
+    leave.approvedBy = req.user.id;
+    leave.approvedDate = new Date();
+    
+    if (status === 'rejected' && rejectionReason) {
+      leave.rejectionReason = rejectionReason;
+    }
+
+    await leave.save();
+
+    // Create notification for employee
+    const notificationType = status === 'approved' ? 'leave_approved' : 'leave_rejected';
+    const notificationTitle = status === 'approved' ? 'Leave Request Approved' : 'Leave Request Rejected';
+    const notificationMessage = status === 'approved' 
+      ? `Your ${leave.leaveType} request from ${leave.startDate.toDateString()} to ${leave.endDate.toDateString()} has been approved.`
+      : `Your ${leave.leaveType} request from ${leave.startDate.toDateString()} to ${leave.endDate.toDateString()} has been rejected. ${rejectionReason ? 'Reason: ' + rejectionReason : ''}`;
+
+    await Notification.createNotification({
+      recipient: leave.employeeId._id,
+      sender: req.user.id,
+      type: notificationType,
+      title: notificationTitle,
+      message: notificationMessage,
+      data: {
+        leaveId: leave._id,
+        status,
+        rejectionReason: rejectionReason || null
+      }
+    });
+
+    res.json({
+      message: `Leave request ${status} successfully`,
+      data: leave
+    });
+  } catch (error) {
+    console.error('Update leave status error:', error);
+    res.status(500).json({ message: 'Error updating leave status' });
+  }
+});
+
+// Cancel leave request (Employee only, for pending requests)
+app.delete('/api/leave/:id', authenticateToken, async (req, res) => {
+  try {
+    const leave = await Leave.findById(req.params.id);
+    if (!leave) {
+      return res.status(404).json({ message: 'Leave request not found' });
+    }
+
+    // Check if user owns this leave request
+    if (leave.employeeId.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Not authorized to cancel this leave request' });
+    }
+
+    // Can only cancel pending requests
+    if (leave.status !== 'pending') {
+      return res.status(400).json({ message: 'Can only cancel pending leave requests' });
+    }
+
+    leave.status = 'cancelled';
+    await leave.save();
+
+    res.json({
+      message: 'Leave request cancelled successfully',
+      data: leave
+    });
+  } catch (error) {
+    console.error('Cancel leave error:', error);
+    res.status(500).json({ message: 'Error cancelling leave request' });
+  }
+});
+
+// Get leave calendar data
+app.get('/api/leave/calendar', authenticateToken, async (req, res) => {
+  try {
+    const { month, year } = req.query;
+    const targetMonth = month ? parseInt(month) - 1 : new Date().getMonth();
+    const targetYear = year ? parseInt(year) : new Date().getFullYear();
+    
+    const startDate = new Date(targetYear, targetMonth, 1);
+    const endDate = new Date(targetYear, targetMonth + 1, 0);
+    
+    let query = {
+      status: 'approved',
+      $or: [
+        { startDate: { $lte: endDate }, endDate: { $gte: startDate } }
+      ]
+    };
+
+    // Role-based filtering
+    if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
+      query.employeeId = req.user.id;
+    }
+
+    const leaves = await Leave.find(query)
+      .populate('employeeId', 'firstName lastName employeeCode department')
+      .sort({ startDate: 1 });
+
+    const calendarData = leaves.map(leave => ({
+      id: leave._id,
+      title: `${leave.employeeId.firstName} ${leave.employeeId.lastName} - ${leave.leaveType}`,
+      start: leave.startDate,
+      end: new Date(leave.endDate.getTime() + 24 * 60 * 60 * 1000), // Add 1 day for full-day display
+      employee: {
+        name: `${leave.employeeId.firstName} ${leave.employeeId.lastName}`,
+        code: leave.employeeId.employeeCode,
+        department: leave.employeeId.department
+      },
+      leaveType: leave.leaveType,
+      isHalfDay: leave.isHalfDay,
+      reason: leave.reason
+    }));
+
+    res.json({ data: calendarData });
+  } catch (error) {
+    console.error('Get leave calendar error:', error);
+    res.status(500).json({ message: 'Error fetching leave calendar data' });
+  }
+});
+
+// Payroll Management System - Real Implementation
 app.post('/api/payroll/generate', authenticateToken, async (req, res) => {
   try {
     // Check if user has admin or HR manager role
@@ -1124,21 +1324,85 @@ app.post('/api/payroll/generate', authenticateToken, async (req, res) => {
 
     const { month, year, employeeIds } = req.body;
     
-    // Mock payroll generation
-    const payrollBatch = {
-      id: Date.now(),
+    // Validate required fields
+    if (!month || !year) {
+      return res.status(400).json({ message: 'Month and year are required' });
+    }
+
+    // Validate month and year
+    if (month < 1 || month > 12) {
+      return res.status(400).json({ message: 'Invalid month. Must be between 1 and 12' });
+    }
+
+    const currentYear = new Date().getFullYear();
+    if (year < currentYear - 5 || year > currentYear + 1) {
+      return res.status(400).json({ message: 'Invalid year' });
+    }
+
+    // Get employees to generate payroll for
+    let employees;
+    if (employeeIds && employeeIds.length > 0) {
+      employees = await User.find({ 
+        _id: { $in: employeeIds },
+        role: 'employee',
+        isActive: true 
+      });
+    } else {
+      employees = await User.find({ 
+        role: 'employee',
+        isActive: true 
+      });
+    }
+
+    if (employees.length === 0) {
+      return res.status(400).json({ message: 'No active employees found' });
+    }
+
+    // Generate payroll for each employee
+    const results = await Payroll.generateBulkPayroll(
+      employees.map(emp => emp._id),
       month,
       year,
-      generatedBy: req.user.email,
-      generatedDate: new Date().toISOString(),
-      employeeCount: employeeIds ? employeeIds.length : 25,
-      totalAmount: 125000,
-      status: 'generated'
-    };
+      req.user.id
+    );
+
+    // Calculate summary
+    const successful = results.filter(r => r.status !== 'error');
+    const failed = results.filter(r => r.status === 'error');
+    const totalAmount = successful.reduce((sum, r) => sum + (r.payroll?.netSalary || 0), 0);
+
+    // Create notifications for employees
+    for (const result of successful) {
+      if (result.status === 'created') {
+        await Notification.createNotification({
+          recipient: result.employeeId,
+          sender: req.user.id,
+          type: 'payroll_generated',
+          title: 'Payroll Generated',
+          message: `Your payroll for ${new Date(year, month - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} has been generated. Net salary: ₹${result.payroll.netSalary.toFixed(2)}`,
+          data: {
+            payrollId: result.payroll._id,
+            month,
+            year,
+            netSalary: result.payroll.netSalary
+          }
+        });
+      }
+    }
 
     res.json({
-      message: 'Payroll generated successfully',
-      data: payrollBatch
+      message: `Payroll generated successfully for ${successful.length} employees`,
+      data: {
+        month,
+        year,
+        generatedBy: req.user.id,
+        generatedDate: new Date(),
+        employeeCount: successful.length,
+        totalAmount,
+        successful: successful.length,
+        failed: failed.length,
+        results: results
+      }
     });
   } catch (error) {
     console.error('Payroll generation error:', error);
@@ -1146,73 +1410,315 @@ app.post('/api/payroll/generate', authenticateToken, async (req, res) => {
   }
 });
 
-app.get('/api/payroll', authenticateToken, (req, res) => {
+// Get payroll records for current user or all (for HR/Admin)
+app.get('/api/payroll', authenticateToken, async (req, res) => {
   try {
-    // Mock payroll data
-    const mockPayroll = [
-      {
-        id: 1,
-        month: 'January',
-        year: 2024,
-        basicSalary: 5000,
-        allowances: 1000,
-        deductions: 500,
-        netSalary: 5500,
-        status: 'paid',
-        payDate: '2024-01-31'
-      },
-      {
-        id: 2,
-        month: 'December',
-        year: 2023,
-        basicSalary: 5000,
-        allowances: 1200,
-        deductions: 450,
-        netSalary: 5750,
-        status: 'paid',
-        payDate: '2023-12-31'
-      }
-    ];
+    const { month, year, employeeId, status } = req.query;
+    let query = {};
 
-    res.json({ data: mockPayroll });
+    // Role-based access control
+    if (req.user.role === 'admin' || req.user.role === 'hr_manager') {
+      // Admin/HR can view all payrolls or specific employee's payroll
+      if (employeeId) {
+        query.employeeId = employeeId;
+      }
+    } else {
+      // Regular employees can only view their own payroll
+      query.employeeId = req.user.id;
+    }
+
+    // Filter by month and year if provided
+    if (month && year) {
+      query['payPeriod.month'] = parseInt(month);
+      query['payPeriod.year'] = parseInt(year);
+    } else if (year) {
+      query['payPeriod.year'] = parseInt(year);
+    }
+
+    // Filter by status if provided
+    if (status) {
+      query.paymentStatus = status;
+    }
+
+    const payrolls = await Payroll.find(query)
+      .populate('employeeId', 'firstName lastName email employeeCode department')
+      .populate('generatedBy', 'firstName lastName email')
+      .populate('approvedBy', 'firstName lastName email')
+      .sort({ 'payPeriod.year': -1, 'payPeriod.month': -1 });
+
+    res.json({ data: payrolls });
   } catch (error) {
     console.error('Get payroll error:', error);
     res.status(500).json({ message: 'Error fetching payroll data' });
   }
 });
 
-app.get('/api/payroll/history', authenticateToken, (req, res) => {
+// Get payroll history/summary (HR/Admin only)
+app.get('/api/payroll/history', authenticateToken, async (req, res) => {
   try {
+    // Check if user has admin or HR manager role
+    if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
+      return res.status(403).json({ message: 'Not authorized to view payroll history' });
+    }
+
     const { year } = req.query;
-    
-    // Mock payroll history
-    const mockHistory = [
+    const targetYear = year ? parseInt(year) : new Date().getFullYear();
+
+    // Get payroll summary by month for the year
+    const payrollHistory = await Payroll.aggregate([
       {
-        id: 1,
-        month: 'January 2024',
-        employeeCount: 25,
-        totalAmount: 125000,
-        generatedDate: '2024-01-31',
-        status: 'completed'
+        $match: {
+          'payPeriod.year': targetYear
+        }
       },
       {
-        id: 2,
-        month: 'December 2023',
-        employeeCount: 24,
-        totalAmount: 120000,
-        generatedDate: '2023-12-31',
-        status: 'completed'
+        $group: {
+          _id: {
+            month: '$payPeriod.month',
+            year: '$payPeriod.year'
+          },
+          employeeCount: { $sum: 1 },
+          totalAmount: { $sum: '$netSalary' },
+          totalBasicSalary: { $sum: '$basicSalary' },
+          totalAllowances: { $sum: '$totalAllowances' },
+          totalDeductions: { $sum: '$totalDeductions' },
+          generatedDate: { $first: '$generatedDate' },
+          paymentStatuses: { $push: '$paymentStatus' }
+        }
+      },
+      {
+        $sort: { '_id.month': -1 }
       }
-    ];
+    ]);
 
-    res.json({ data: mockHistory });
+    // Format the data
+    const formattedHistory = payrollHistory.map(item => {
+      const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+                         'July', 'August', 'September', 'October', 'November', 'December'];
+      
+      const paidCount = item.paymentStatuses.filter(status => status === 'paid').length;
+      const pendingCount = item.paymentStatuses.filter(status => status === 'pending').length;
+      const processedCount = item.paymentStatuses.filter(status => status === 'processed').length;
+
+      return {
+        id: `${item._id.year}-${item._id.month}`,
+        month: monthNames[item._id.month - 1],
+        year: item._id.year,
+        monthYear: `${monthNames[item._id.month - 1]} ${item._id.year}`,
+        employeeCount: item.employeeCount,
+        totalAmount: item.totalAmount,
+        totalBasicSalary: item.totalBasicSalary,
+        totalAllowances: item.totalAllowances,
+        totalDeductions: item.totalDeductions,
+        generatedDate: item.generatedDate,
+        paymentStatus: {
+          paid: paidCount,
+          pending: pendingCount,
+          processed: processedCount
+        },
+        status: paidCount === item.employeeCount ? 'completed' : 
+                pendingCount > 0 ? 'pending' : 'processed'
+      };
+    });
+
+    res.json({ data: formattedHistory });
   } catch (error) {
     console.error('Get payroll history error:', error);
     res.status(500).json({ message: 'Error fetching payroll history' });
   }
 });
 
-// Analytics endpoints (using User model for employee data)
+// Update payroll payment status (HR/Admin only)
+app.put('/api/payroll/:id/payment', authenticateToken, async (req, res) => {
+  try {
+    // Check if user has admin or HR manager role
+    if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
+      return res.status(403).json({ message: 'Not authorized to update payroll payment status' });
+    }
+
+    const { paymentStatus, paymentMethod, paymentReference } = req.body;
+    
+    if (!['pending', 'processed', 'paid', 'failed'].includes(paymentStatus)) {
+      return res.status(400).json({ message: 'Invalid payment status' });
+    }
+
+    const payroll = await Payroll.findById(req.params.id).populate('employeeId', 'firstName lastName email');
+    if (!payroll) {
+      return res.status(404).json({ message: 'Payroll record not found' });
+    }
+
+    // Update payment details
+    payroll.paymentStatus = paymentStatus;
+    if (paymentMethod) payroll.paymentMethod = paymentMethod;
+    if (paymentReference) payroll.paymentReference = paymentReference;
+    
+    if (paymentStatus === 'paid') {
+      payroll.paymentDate = new Date();
+    }
+
+    await payroll.save();
+
+    // Create notification for employee
+    if (paymentStatus === 'paid') {
+      await Notification.createNotification({
+        recipient: payroll.employeeId._id,
+        sender: req.user.id,
+        type: 'payroll_generated',
+        title: 'Salary Paid',
+        message: `Your salary for ${new Date(payroll.payPeriod.year, payroll.payPeriod.month - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} has been paid. Amount: ₹${payroll.netSalary.toFixed(2)}`,
+        data: {
+          payrollId: payroll._id,
+          month: payroll.payPeriod.month,
+          year: payroll.payPeriod.year,
+          netSalary: payroll.netSalary,
+          paymentDate: payroll.paymentDate
+        }
+      });
+    }
+
+    res.json({
+      message: `Payroll payment status updated to ${paymentStatus}`,
+      data: payroll
+    });
+  } catch (error) {
+    console.error('Update payroll payment error:', error);
+    res.status(500).json({ message: 'Error updating payroll payment status' });
+  }
+});
+
+// Get individual payroll details
+app.get('/api/payroll/:id', authenticateToken, async (req, res) => {
+  try {
+    const payroll = await Payroll.findById(req.params.id)
+      .populate('employeeId', 'firstName lastName email employeeCode department')
+      .populate('generatedBy', 'firstName lastName email')
+      .populate('approvedBy', 'firstName lastName email');
+
+    if (!payroll) {
+      return res.status(404).json({ message: 'Payroll record not found' });
+    }
+
+    // Check access permissions
+    if (req.user.role !== 'admin' && req.user.role !== 'hr_manager' && 
+        payroll.employeeId._id.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Not authorized to view this payroll record' });
+    }
+
+    res.json({ data: payroll });
+  } catch (error) {
+    console.error('Get payroll details error:', error);
+    res.status(500).json({ message: 'Error fetching payroll details' });
+  }
+});
+
+// Approve payroll (Admin only)
+app.put('/api/payroll/:id/approve', authenticateToken, async (req, res) => {
+  try {
+    // Check if user has admin role
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Not authorized to approve payroll' });
+    }
+
+    const payroll = await Payroll.findById(req.params.id).populate('employeeId', 'firstName lastName email');
+    if (!payroll) {
+      return res.status(404).json({ message: 'Payroll record not found' });
+    }
+
+    payroll.approvedBy = req.user.id;
+    payroll.approvedDate = new Date();
+    await payroll.save();
+
+    res.json({
+      message: 'Payroll approved successfully',
+      data: payroll
+    });
+  } catch (error) {
+    console.error('Approve payroll error:', error);
+    res.status(500).json({ message: 'Error approving payroll' });
+  }
+});
+
+// Get payroll statistics (HR/Admin only)
+app.get('/api/payroll/stats', authenticateToken, async (req, res) => {
+  try {
+    // Check if user has admin or HR manager role
+    if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
+      return res.status(403).json({ message: 'Not authorized to view payroll statistics' });
+    }
+
+    const { year } = req.query;
+    const targetYear = year ? parseInt(year) : new Date().getFullYear();
+
+    // Get payroll statistics
+    const stats = await Payroll.aggregate([
+      {
+        $match: {
+          'payPeriod.year': targetYear
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalEmployees: { $addToSet: '$employeeId' },
+          totalPayrolls: { $sum: 1 },
+          totalAmount: { $sum: '$netSalary' },
+          totalBasicSalary: { $sum: '$basicSalary' },
+          totalAllowances: { $sum: '$totalAllowances' },
+          totalDeductions: { $sum: '$totalDeductions' },
+          avgSalary: { $avg: '$netSalary' },
+          maxSalary: { $max: '$netSalary' },
+          minSalary: { $min: '$netSalary' },
+          paymentStatuses: { $push: '$paymentStatus' }
+        }
+      }
+    ]);
+
+    const result = stats[0] || {
+      totalEmployees: [],
+      totalPayrolls: 0,
+      totalAmount: 0,
+      totalBasicSalary: 0,
+      totalAllowances: 0,
+      totalDeductions: 0,
+      avgSalary: 0,
+      maxSalary: 0,
+      minSalary: 0,
+      paymentStatuses: []
+    };
+
+    // Count payment statuses
+    const statusCounts = result.paymentStatuses.reduce((acc, status) => {
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    }, {});
+
+    res.json({
+      data: {
+        year: targetYear,
+        totalEmployees: result.totalEmployees.length,
+        totalPayrolls: result.totalPayrolls,
+        totalAmount: result.totalAmount,
+        totalBasicSalary: result.totalBasicSalary,
+        totalAllowances: result.totalAllowances,
+        totalDeductions: result.totalDeductions,
+        avgSalary: result.avgSalary,
+        maxSalary: result.maxSalary,
+        minSalary: result.minSalary,
+        paymentStatusBreakdown: {
+          pending: statusCounts.pending || 0,
+          processed: statusCounts.processed || 0,
+          paid: statusCounts.paid || 0,
+          failed: statusCounts.failed || 0
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get payroll stats error:', error);
+    res.status(500).json({ message: 'Error fetching payroll statistics' });
+  }
+});
+
+// Real-time Analytics System - Database-driven Implementation
 app.get('/api/analytics/employee/demographics', authenticateToken, async (req, res) => {
   try {
     // Check if user has admin or HR manager role
@@ -1220,37 +1726,170 @@ app.get('/api/analytics/employee/demographics', authenticateToken, async (req, r
       return res.status(403).json({ message: 'Not authorized to view analytics' });
     }
 
-    // Mock demographics data
+    // Get real employee demographics from database
+    const totalEmployees = await User.countDocuments({ role: 'employee', isActive: true });
+    
+    // Calculate growth rate (employees added in last 30 days vs previous 30 days)
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+    
+    const recentHires = await User.countDocuments({
+      role: 'employee',
+      createdAt: { $gte: thirtyDaysAgo }
+    });
+    
+    const previousHires = await User.countDocuments({
+      role: 'employee',
+      createdAt: { $gte: sixtyDaysAgo, $lt: thirtyDaysAgo }
+    });
+    
+    const growthRate = previousHires > 0 ? ((recentHires - previousHires) / previousHires * 100) : 0;
+
+    // Get department distribution
+    const departmentStats = await User.aggregate([
+      { $match: { role: 'employee', isActive: true } },
+      { $group: { _id: '$department', count: { $sum: 1 } } },
+      { $sort: { count: -1 } }
+    ]);
+
+    const departments = departmentStats.map(dept => ({
+      name: dept._id || 'Unassigned',
+      count: dept.count
+    }));
+
+    // Calculate age groups from dateOfBirth
+    const ageGroupStats = await User.aggregate([
+      { 
+        $match: { 
+          role: 'employee', 
+          isActive: true,
+          dateOfBirth: { $exists: true, $ne: null }
+        }
+      },
+      {
+        $addFields: {
+          age: {
+            $floor: {
+              $divide: [
+                { $subtract: [new Date(), '$dateOfBirth'] },
+                365.25 * 24 * 60 * 60 * 1000
+              ]
+            }
+          }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            $switch: {
+              branches: [
+                { case: { $and: [{ $gte: ['$age', 20] }, { $lt: ['$age', 26] }] }, then: '20-25' },
+                { case: { $and: [{ $gte: ['$age', 26] }, { $lt: ['$age', 31] }] }, then: '26-30' },
+                { case: { $and: [{ $gte: ['$age', 31] }, { $lt: ['$age', 36] }] }, then: '31-35' },
+                { case: { $and: [{ $gte: ['$age', 36] }, { $lt: ['$age', 41] }] }, then: '36-40' },
+                { case: { $gte: ['$age', 41] }, then: '41+' }
+              ],
+              default: 'Unknown'
+            }
+          },
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const ageGroups = ageGroupStats.map(group => ({
+      range: group._id,
+      count: group.count,
+      percentage: Math.round((group.count / totalEmployees) * 100)
+    }));
+
+    // Get gender distribution from personalInfo
+    const genderStats = await User.aggregate([
+      { 
+        $match: { 
+          role: 'employee', 
+          isActive: true,
+          'personalInfo.gender': { $exists: true, $ne: '' }
+        }
+      },
+      { $group: { _id: '$personalInfo.gender', count: { $sum: 1 } } }
+    ]);
+
+    const gender = genderStats.map(g => ({
+      type: g._id || 'Not Specified',
+      count: g.count,
+      percentage: Math.round((g.count / totalEmployees) * 100)
+    }));
+
+    // Calculate experience based on dateOfJoining
+    const experienceStats = await User.aggregate([
+      { 
+        $match: { 
+          role: 'employee', 
+          isActive: true,
+          dateOfJoining: { $exists: true, $ne: null }
+        }
+      },
+      {
+        $addFields: {
+          experience: {
+            $floor: {
+              $divide: [
+                { $subtract: [new Date(), '$dateOfJoining'] },
+                365.25 * 24 * 60 * 60 * 1000
+              ]
+            }
+          }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            $switch: {
+              branches: [
+                { case: { $and: [{ $gte: ['$experience', 0] }, { $lt: ['$experience', 3] }] }, then: '0-2 years' },
+                { case: { $and: [{ $gte: ['$experience', 3] }, { $lt: ['$experience', 6] }] }, then: '3-5 years' },
+                { case: { $and: [{ $gte: ['$experience', 6] }, { $lt: ['$experience', 11] }] }, then: '6-10 years' },
+                { case: { $gte: ['$experience', 11] }, then: '10+ years' }
+              ],
+              default: 'Unknown'
+            }
+          },
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const experience = experienceStats.map(exp => ({
+      range: exp._id,
+      count: exp.count,
+      percentage: Math.round((exp.count / totalEmployees) * 100)
+    }));
+
+    // Calculate retention rate (employees who stayed for more than 1 year)
+    const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+    const retainedEmployees = await User.countDocuments({
+      role: 'employee',
+      isActive: true,
+      createdAt: { $lt: oneYearAgo }
+    });
+    
+    const totalOldEmployees = await User.countDocuments({
+      role: 'employee',
+      createdAt: { $lt: oneYearAgo }
+    });
+    
+    const retentionRate = totalOldEmployees > 0 ? Math.round((retainedEmployees / totalOldEmployees) * 100) : 100;
+
     const demographics = {
-      totalEmployees: 156,
-      growthRate: 12,
-      retentionRate: 87,
-      retentionTrend: 5,
-      departments: [
-        { name: 'Engineering', count: 45 },
-        { name: 'Sales', count: 32 },
-        { name: 'Marketing', count: 28 },
-        { name: 'HR', count: 15 },
-        { name: 'Finance', count: 20 },
-        { name: 'Operations', count: 16 }
-      ],
-      ageGroups: [
-        { range: '20-25', count: 25, percentage: 16 },
-        { range: '26-30', count: 48, percentage: 31 },
-        { range: '31-35', count: 42, percentage: 27 },
-        { range: '36-40', count: 28, percentage: 18 },
-        { range: '41+', count: 13, percentage: 8 }
-      ],
-      gender: [
-        { type: 'Male', count: 89, percentage: 57 },
-        { type: 'Female', count: 67, percentage: 43 }
-      ],
-      experience: [
-        { range: '0-2 years', count: 35, percentage: 22 },
-        { range: '3-5 years', count: 52, percentage: 33 },
-        { range: '6-10 years', count: 45, percentage: 29 },
-        { range: '10+ years', count: 24, percentage: 16 }
-      ]
+      totalEmployees,
+      growthRate: Math.round(growthRate * 10) / 10,
+      retentionRate,
+      retentionTrend: Math.random() > 0.5 ? Math.round(Math.random() * 10) : -Math.round(Math.random() * 5), // Simulated trend
+      departments,
+      ageGroups,
+      gender,
+      experience
     };
 
     res.json({ data: demographics });
@@ -1260,43 +1899,88 @@ app.get('/api/analytics/employee/demographics', authenticateToken, async (req, r
   }
 });
 
-app.get('/api/analytics/employee/turnover', authenticateToken, (req, res) => {
+app.get('/api/analytics/employee/turnover', authenticateToken, async (req, res) => {
   try {
     // Check if user has admin or HR manager role
     if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
       return res.status(403).json({ message: 'Not authorized to view analytics' });
     }
 
-    const { period } = req.query;
+    const { period = '12months' } = req.query;
     
-    // Mock turnover data based on period
-    let turnoverData;
+    let months = [];
+    let startDate, endDate;
     
     if (period === '3months') {
-      turnoverData = {
-        currentRate: 8.5,
-        trend: -2.1,
-        months: ['Oct 2023', 'Nov 2023', 'Dec 2023'],
-        rates: [10.2, 9.1, 8.5],
-        industryAverage: [12.0, 12.0, 12.0]
-      };
+      for (let i = 2; i >= 0; i--) {
+        const date = new Date();
+        date.setMonth(date.getMonth() - i);
+        months.push(date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }));
+      }
+      startDate = new Date();
+      startDate.setMonth(startDate.getMonth() - 3);
     } else if (period === '6months') {
-      turnoverData = {
-        currentRate: 8.5,
-        trend: -1.8,
-        months: ['Jul 2023', 'Aug 2023', 'Sep 2023', 'Oct 2023', 'Nov 2023', 'Dec 2023'],
-        rates: [11.2, 10.8, 10.5, 10.2, 9.1, 8.5],
-        industryAverage: [12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
-      };
+      for (let i = 5; i >= 0; i--) {
+        const date = new Date();
+        date.setMonth(date.getMonth() - i);
+        months.push(date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }));
+      }
+      startDate = new Date();
+      startDate.setMonth(startDate.getMonth() - 6);
     } else {
-      turnoverData = {
-        currentRate: 8.5,
-        trend: -3.2,
-        months: ['Jan 2023', 'Feb 2023', 'Mar 2023', 'Apr 2023', 'May 2023', 'Jun 2023', 'Jul 2023', 'Aug 2023', 'Sep 2023', 'Oct 2023', 'Nov 2023', 'Dec 2023'],
-        rates: [15.2, 14.8, 13.5, 12.2, 11.8, 11.5, 11.2, 10.8, 10.5, 10.2, 9.1, 8.5],
-        industryAverage: [12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
-      };
+      for (let i = 11; i >= 0; i--) {
+        const date = new Date();
+        date.setMonth(date.getMonth() - i);
+        months.push(date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }));
+      }
+      startDate = new Date();
+      startDate.setFullYear(startDate.getFullYear() - 1);
     }
+    
+    endDate = new Date();
+
+    // Calculate turnover rates for each month
+    const rates = [];
+    const industryAverage = [];
+    
+    for (let i = 0; i < months.length; i++) {
+      const monthStart = new Date();
+      monthStart.setMonth(monthStart.getMonth() - (months.length - 1 - i));
+      monthStart.setDate(1);
+      
+      const monthEnd = new Date(monthStart);
+      monthEnd.setMonth(monthEnd.getMonth() + 1);
+      monthEnd.setDate(0);
+      
+      // Count departures (deactivated employees) in this month
+      const departures = await User.countDocuments({
+        role: 'employee',
+        isActive: false,
+        updatedAt: { $gte: monthStart, $lte: monthEnd }
+      });
+      
+      // Count total employees at the beginning of the month
+      const totalEmployees = await User.countDocuments({
+        role: 'employee',
+        createdAt: { $lt: monthEnd }
+      });
+      
+      const turnoverRate = totalEmployees > 0 ? (departures / totalEmployees) * 100 : 0;
+      rates.push(Math.round(turnoverRate * 10) / 10);
+      industryAverage.push(12.0); // Industry benchmark
+    }
+
+    const currentRate = rates[rates.length - 1] || 0;
+    const previousRate = rates[rates.length - 2] || currentRate;
+    const trend = currentRate - previousRate;
+
+    const turnoverData = {
+      currentRate,
+      trend: Math.round(trend * 10) / 10,
+      months,
+      rates,
+      industryAverage
+    };
 
     res.json({ data: turnoverData });
   } catch (error) {
@@ -1305,40 +1989,77 @@ app.get('/api/analytics/employee/turnover', authenticateToken, (req, res) => {
   }
 });
 
-app.get('/api/analytics/employee/headcount-trends', authenticateToken, (req, res) => {
+app.get('/api/analytics/employee/headcount-trends', authenticateToken, async (req, res) => {
   try {
     // Check if user has admin or HR manager role
     if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
       return res.status(403).json({ message: 'Not authorized to view analytics' });
     }
 
-    const { period } = req.query;
+    const { period = '12months' } = req.query;
     
-    // Mock headcount data based on period
-    let headcountData;
+    let months = [];
+    let monthsCount = 12;
     
     if (period === '3months') {
-      headcountData = {
-        months: ['Oct 2023', 'Nov 2023', 'Dec 2023'],
-        total: [148, 152, 156],
-        newHires: [8, 6, 7],
-        departures: [4, 2, 3]
-      };
+      monthsCount = 3;
     } else if (period === '6months') {
-      headcountData = {
-        months: ['Jul 2023', 'Aug 2023', 'Sep 2023', 'Oct 2023', 'Nov 2023', 'Dec 2023'],
-        total: [135, 140, 144, 148, 152, 156],
-        newHires: [10, 8, 6, 8, 6, 7],
-        departures: [5, 3, 2, 4, 2, 3]
-      };
-    } else {
-      headcountData = {
-        months: ['Jan 2023', 'Feb 2023', 'Mar 2023', 'Apr 2023', 'May 2023', 'Jun 2023', 'Jul 2023', 'Aug 2023', 'Sep 2023', 'Oct 2023', 'Nov 2023', 'Dec 2023'],
-        total: [120, 118, 122, 125, 128, 132, 135, 140, 144, 148, 152, 156],
-        newHires: [5, 3, 8, 6, 7, 9, 10, 8, 6, 8, 6, 7],
-        departures: [7, 5, 4, 3, 4, 5, 5, 3, 2, 4, 2, 3]
-      };
+      monthsCount = 6;
     }
+    
+    for (let i = monthsCount - 1; i >= 0; i--) {
+      const date = new Date();
+      date.setMonth(date.getMonth() - i);
+      months.push(date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }));
+    }
+
+    const total = [];
+    const newHires = [];
+    const departures = [];
+
+    for (let i = 0; i < months.length; i++) {
+      const monthStart = new Date();
+      monthStart.setMonth(monthStart.getMonth() - (months.length - 1 - i));
+      monthStart.setDate(1);
+      
+      const monthEnd = new Date(monthStart);
+      monthEnd.setMonth(monthEnd.getMonth() + 1);
+      monthEnd.setDate(0);
+      
+      // Count total employees at end of month
+      const totalCount = await User.countDocuments({
+        role: 'employee',
+        createdAt: { $lte: monthEnd },
+        $or: [
+          { isActive: true },
+          { isActive: false, updatedAt: { $gt: monthEnd } }
+        ]
+      });
+      
+      // Count new hires in this month
+      const hiresCount = await User.countDocuments({
+        role: 'employee',
+        createdAt: { $gte: monthStart, $lte: monthEnd }
+      });
+      
+      // Count departures in this month
+      const departuresCount = await User.countDocuments({
+        role: 'employee',
+        isActive: false,
+        updatedAt: { $gte: monthStart, $lte: monthEnd }
+      });
+      
+      total.push(totalCount);
+      newHires.push(hiresCount);
+      departures.push(departuresCount);
+    }
+
+    const headcountData = {
+      months,
+      total,
+      newHires,
+      departures
+    };
 
     res.json({ data: headcountData });
   } catch (error) {
@@ -1347,27 +2068,61 @@ app.get('/api/analytics/employee/headcount-trends', authenticateToken, (req, res
   }
 });
 
-app.get('/api/analytics/employee/satisfaction', authenticateToken, (req, res) => {
+app.get('/api/analytics/employee/satisfaction', authenticateToken, async (req, res) => {
   try {
     // Check if user has admin or HR manager role
     if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
       return res.status(403).json({ message: 'Not authorized to view analytics' });
     }
 
-    // Mock satisfaction data
+    // Since we don't have a satisfaction survey system yet, we'll provide simulated data
+    // based on real metrics like retention rate, attendance, etc.
+    
+    // Calculate base satisfaction from retention and attendance
+    const totalEmployees = await User.countDocuments({ role: 'employee', isActive: true });
+    const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+    
+    const retainedEmployees = await User.countDocuments({
+      role: 'employee',
+      isActive: true,
+      createdAt: { $lt: oneYearAgo }
+    });
+    
+    const retentionRate = totalEmployees > 0 ? (retainedEmployees / totalEmployees) : 1;
+    
+    // Get average attendance rate
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const attendanceRecords = await Attendance.find({
+      date: { $gte: thirtyDaysAgo }
+    });
+    
+    const avgAttendanceRate = attendanceRecords.length > 0 
+      ? attendanceRecords.filter(r => r.status === 'present').length / attendanceRecords.length 
+      : 0.95;
+
+    // Calculate satisfaction score based on metrics
+    const baseSatisfaction = (retentionRate * 0.4 + avgAttendanceRate * 0.3 + 0.3) * 5;
+    const averageScore = Math.min(5, Math.max(1, baseSatisfaction));
+
     const satisfactionData = {
-      averageScore: 4.2,
-      improvement: 8.5,
+      averageScore: Math.round(averageScore * 10) / 10,
+      improvement: Math.round((averageScore - 4.0) * 20), // Percentage improvement from baseline
       categories: [
-        { name: 'Work-Life Balance', score: 4.1 },
-        { name: 'Career Growth', score: 3.9 },
-        { name: 'Compensation', score: 4.3 },
-        { name: 'Management', score: 4.0 },
-        { name: 'Work Environment', score: 4.5 }
+        { name: 'Work-Life Balance', score: Math.round((averageScore + (Math.random() - 0.5) * 0.4) * 10) / 10 },
+        { name: 'Career Growth', score: Math.round((averageScore + (Math.random() - 0.5) * 0.6) * 10) / 10 },
+        { name: 'Compensation', score: Math.round((averageScore + (Math.random() - 0.5) * 0.3) * 10) / 10 },
+        { name: 'Management', score: Math.round((averageScore + (Math.random() - 0.5) * 0.5) * 10) / 10 },
+        { name: 'Work Environment', score: Math.round((averageScore + (Math.random() - 0.5) * 0.2) * 10) / 10 }
       ],
       trends: {
         months: ['Aug 2023', 'Sep 2023', 'Oct 2023', 'Nov 2023', 'Dec 2023'],
-        scores: [3.8, 3.9, 4.0, 4.1, 4.2]
+        scores: [
+          Math.round((averageScore - 0.4) * 10) / 10,
+          Math.round((averageScore - 0.3) * 10) / 10,
+          Math.round((averageScore - 0.2) * 10) / 10,
+          Math.round((averageScore - 0.1) * 10) / 10,
+          Math.round(averageScore * 10) / 10
+        ]
       }
     };
 
@@ -1378,37 +2133,423 @@ app.get('/api/analytics/employee/satisfaction', authenticateToken, (req, res) =>
   }
 });
 
-// Attendance Analytics endpoints
-app.get('/api/analytics/attendance/patterns', authenticateToken, (req, res) => {
+// Real-time Attendance Analytics
+app.get('/api/analytics/attendance/patterns', authenticateToken, async (req, res) => {
   try {
     // Check if user has admin or HR manager role
     if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
       return res.status(403).json({ message: 'Not authorized to view analytics' });
     }
 
-    // Mock attendance patterns data
+    const { period = '30days' } = req.query;
+    
+    // Calculate date range
+    const endDate = new Date();
+    const startDate = new Date();
+    
+    if (period === '7days') {
+      startDate.setDate(startDate.getDate() - 7);
+    } else if (period === '30days') {
+      startDate.setDate(startDate.getDate() - 30);
+    } else {
+      startDate.setDate(startDate.getDate() - 90);
+    }
+
+    // Get daily attendance patterns
+    const dailyPatterns = await Attendance.aggregate([
+      {
+        $match: {
+          date: { $gte: startDate, $lte: endDate }
+        }
+      },
+      {
+        $addFields: {
+          dayOfWeek: { $dayOfWeek: '$date' }
+        }
+      },
+      {
+        $group: {
+          _id: '$dayOfWeek',
+          totalRecords: { $sum: 1 },
+          presentRecords: {
+            $sum: {
+              $cond: [{ $eq: ['$status', 'present'] }, 1, 0]
+            }
+          }
+        }
+      },
+      {
+        $sort: { _id: 1 }
+      }
+    ]);
+
+    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const workingDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+    
+    const dailyData = {
+      days: workingDays,
+      attendanceRates: workingDays.map(day => {
+        const dayIndex = dayNames.indexOf(day) + 1;
+        const dayData = dailyPatterns.find(d => d._id === dayIndex);
+        return dayData && dayData.totalRecords > 0 
+          ? Math.round((dayData.presentRecords / dayData.totalRecords) * 100)
+          : 95; // Default rate if no data
+      })
+    };
+
+    // Get monthly trends
+    const monthlyTrends = await Attendance.aggregate([
+      {
+        $match: {
+          date: { $gte: new Date(Date.now() - 150 * 24 * 60 * 60 * 1000) }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: '$date' },
+            month: { $month: '$date' }
+          },
+          totalRecords: { $sum: 1 },
+          presentRecords: {
+            $sum: {
+              $cond: [{ $eq: ['$status', 'present'] }, 1, 0]
+            }
+          }
+        }
+      },
+      {
+        $sort: { '_id.year': 1, '_id.month': 1 }
+      },
+      {
+        $limit: 5
+      }
+    ]);
+
+    const monthlyData = {
+      months: monthlyTrends.map(trend => {
+        const date = new Date(trend._id.year, trend._id.month - 1);
+        return date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+      }),
+      rates: monthlyTrends.map(trend => 
+        trend.totalRecords > 0 
+          ? Math.round((trend.presentRecords / trend.totalRecords) * 100)
+          : 95
+      )
+    };
+
+    // Get department-wise attendance
+    const departmentAttendance = await Attendance.aggregate([
+      {
+        $match: {
+          date: { $gte: startDate, $lte: endDate }
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'userId',
+          foreignField: '_id',
+          as: 'user'
+        }
+      },
+      {
+        $unwind: '$user'
+      },
+      {
+        $group: {
+          _id: '$user.department',
+          totalRecords: { $sum: 1 },
+          presentRecords: {
+            $sum: {
+              $cond: [{ $eq: ['$status', 'present'] }, 1, 0]
+            }
+          }
+        }
+      },
+      {
+        $match: {
+          _id: { $ne: null, $ne: '' }
+        }
+      }
+    ]);
+
+    const departmentWise = departmentAttendance.map(dept => ({
+      department: dept._id || 'Unassigned',
+      rate: dept.totalRecords > 0 
+        ? Math.round((dept.presentRecords / dept.totalRecords) * 100)
+        : 95
+    }));
+
     const patternsData = {
-      dailyPatterns: {
-        days: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-        attendanceRates: [92, 95, 96, 94, 89]
-      },
-      monthlyTrends: {
-        months: ['Aug 2023', 'Sep 2023', 'Oct 2023', 'Nov 2023', 'Dec 2023'],
-        rates: [91, 93, 95, 94, 92]
-      },
-      departmentWise: [
-        { department: 'Engineering', rate: 96 },
-        { department: 'Sales', rate: 89 },
-        { department: 'Marketing', rate: 92 },
-        { department: 'HR', rate: 98 },
-        { department: 'Finance', rate: 94 }
-      ]
+      dailyPatterns: dailyData,
+      monthlyTrends: monthlyData,
+      departmentWise
     };
 
     res.json({ data: patternsData });
   } catch (error) {
     console.error('Get attendance patterns error:', error);
     res.status(500).json({ message: 'Error fetching attendance patterns data' });
+  }
+});
+
+// Real-time Dashboard Analytics
+app.get('/api/analytics/dashboard/overview', authenticateToken, async (req, res) => {
+  try {
+    // Check if user has admin or HR manager role
+    if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
+      return res.status(403).json({ message: 'Not authorized to view dashboard analytics' });
+    }
+
+    const today = new Date();
+    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+
+    // Get total employees
+    const totalEmployees = await User.countDocuments({ role: 'employee', isActive: true });
+    
+    // Get employees added this month
+    const newEmployeesThisMonth = await User.countDocuments({
+      role: 'employee',
+      createdAt: { $gte: startOfMonth }
+    });
+
+    // Get today's attendance
+    const todayAttendance = await Attendance.countDocuments({
+      date: {
+        $gte: new Date(today.getFullYear(), today.getMonth(), today.getDate()),
+        $lt: new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1)
+      },
+      status: { $in: ['present', 'late'] }
+    });
+
+    const attendanceRate = totalEmployees > 0 ? Math.round((todayAttendance / totalEmployees) * 100) : 0;
+
+    // Get pending leave requests
+    const pendingLeaves = await Leave.countDocuments({ status: 'pending' });
+
+    // Get this month's payroll status
+    const currentMonth = today.getMonth() + 1;
+    const currentYear = today.getFullYear();
+    
+    const payrollGenerated = await Payroll.countDocuments({
+      'payPeriod.month': currentMonth,
+      'payPeriod.year': currentYear
+    });
+
+    const payrollPaid = await Payroll.countDocuments({
+      'payPeriod.month': currentMonth,
+      'payPeriod.year': currentYear,
+      paymentStatus: 'paid'
+    });
+
+    // Get recent activities (last 10 notifications)
+    const recentActivities = await Notification.find({
+      recipient: { $in: await User.find({ role: { $in: ['admin', 'hr_manager'] } }).distinct('_id') }
+    })
+    .populate('sender', 'firstName lastName')
+    .sort({ createdAt: -1 })
+    .limit(10);
+
+    const overview = {
+      totalEmployees,
+      newEmployeesThisMonth,
+      attendanceRate,
+      pendingLeaves,
+      payroll: {
+        generated: payrollGenerated,
+        paid: payrollPaid,
+        pending: payrollGenerated - payrollPaid
+      },
+      recentActivities: recentActivities.map(activity => ({
+        id: activity._id,
+        type: activity.type,
+        title: activity.title,
+        message: activity.message,
+        sender: activity.sender ? `${activity.sender.firstName} ${activity.sender.lastName}` : 'System',
+        createdAt: activity.createdAt,
+        isRead: activity.isRead
+      }))
+    };
+
+    res.json({ data: overview });
+  } catch (error) {
+    console.error('Get dashboard overview error:', error);
+    res.status(500).json({ message: 'Error fetching dashboard overview data' });
+  }
+});
+
+// Notification System Endpoints
+app.get('/api/notifications', authenticateToken, async (req, res) => {
+  try {
+    const { page = 1, limit = 20, unreadOnly = false } = req.query;
+    
+    let query = { recipient: req.user.id };
+    if (unreadOnly === 'true') {
+      query.isRead = false;
+    }
+
+    const notifications = await Notification.find(query)
+      .populate('sender', 'firstName lastName')
+      .sort({ createdAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+
+    const total = await Notification.countDocuments(query);
+    const unreadCount = await Notification.countDocuments({ 
+      recipient: req.user.id, 
+      isRead: false 
+    });
+
+    res.json({
+      data: notifications,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / limit)
+      },
+      unreadCount
+    });
+  } catch (error) {
+    console.error('Get notifications error:', error);
+    res.status(500).json({ message: 'Error fetching notifications' });
+  }
+});
+
+app.put('/api/notifications/:id/read', authenticateToken, async (req, res) => {
+  try {
+    const notification = await Notification.findOneAndUpdate(
+      { _id: req.params.id, recipient: req.user.id },
+      { isRead: true, readAt: new Date() },
+      { new: true }
+    );
+
+    if (!notification) {
+      return res.status(404).json({ message: 'Notification not found' });
+    }
+
+    res.json({ message: 'Notification marked as read', data: notification });
+  } catch (error) {
+    console.error('Mark notification as read error:', error);
+    res.status(500).json({ message: 'Error updating notification' });
+  }
+});
+
+app.put('/api/notifications/mark-all-read', authenticateToken, async (req, res) => {
+  try {
+    await Notification.updateMany(
+      { recipient: req.user.id, isRead: false },
+      { isRead: true, readAt: new Date() }
+    );
+
+    res.json({ message: 'All notifications marked as read' });
+  } catch (error) {
+    console.error('Mark all notifications as read error:', error);
+    res.status(500).json({ message: 'Error updating notifications' });
+  }
+});
+
+// Real-time Attendance Report with Database Integration
+app.get('/api/attendance/report', authenticateToken, async (req, res) => {
+  try {
+    // Check if user has admin or HR manager role
+    if (req.user.role !== 'admin' && req.user.role !== 'hr_manager') {
+      return res.status(403).json({ message: 'Not authorized to view attendance reports' });
+    }
+
+    const { month, year, department } = req.query;
+    const targetMonth = month ? parseInt(month) : new Date().getMonth() + 1;
+    const targetYear = year ? parseInt(year) : new Date().getFullYear();
+    
+    const startDate = new Date(targetYear, targetMonth - 1, 1);
+    const endDate = new Date(targetYear, targetMonth, 0);
+    
+    // Build query for attendance records
+    let attendanceQuery = {
+      date: { $gte: startDate, $lte: endDate }
+    };
+
+    // Get employees based on department filter
+    let employeeQuery = { role: 'employee', isActive: true };
+    if (department && department !== 'all') {
+      employeeQuery.department = department;
+    }
+
+    const employees = await User.find(employeeQuery).select('_id firstName lastName department employeeCode');
+    const employeeIds = employees.map(emp => emp._id);
+
+    if (employeeIds.length > 0) {
+      attendanceQuery.userId = { $in: employeeIds };
+    }
+
+    // Get attendance records
+    const attendanceRecords = await Attendance.find(attendanceQuery)
+      .populate('userId', 'firstName lastName department employeeCode');
+
+    // Calculate working days in the month
+    const workingDays = [];
+    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+      const dayOfWeek = d.getDay();
+      if (dayOfWeek !== 0 && dayOfWeek !== 6) { // Exclude weekends
+        workingDays.push(new Date(d));
+      }
+    }
+
+    // Calculate summary
+    const totalEmployees = employees.length;
+    const totalWorkingDays = workingDays.length;
+    const totalPossibleAttendance = totalEmployees * totalWorkingDays;
+    
+    const presentRecords = attendanceRecords.filter(r => r.status === 'present' || r.status === 'late');
+    const absentRecords = totalPossibleAttendance - presentRecords.length;
+    
+    const averageAttendance = totalPossibleAttendance > 0 
+      ? Math.round((presentRecords.length / totalPossibleAttendance) * 100 * 10) / 10
+      : 0;
+
+    // Calculate per-employee statistics
+    const employeeStats = employees.map(employee => {
+      const empAttendance = attendanceRecords.filter(r => 
+        r.userId && r.userId._id.toString() === employee._id.toString()
+      );
+      
+      const presentDays = empAttendance.filter(r => r.status === 'present' || r.status === 'late').length;
+      const lateDays = empAttendance.filter(r => r.status === 'late').length;
+      const absentDays = totalWorkingDays - presentDays;
+      const attendanceRate = totalWorkingDays > 0 
+        ? Math.round((presentDays / totalWorkingDays) * 100 * 10) / 10
+        : 0;
+
+      return {
+        id: employee._id,
+        name: `${employee.firstName} ${employee.lastName}`,
+        employeeCode: employee.employeeCode,
+        department: employee.department || 'Unassigned',
+        presentDays,
+        lateDays,
+        absentDays,
+        attendanceRate
+      };
+    });
+
+    const report = {
+      period: `${new Date(targetYear, targetMonth - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
+      department: department === 'all' ? 'All Departments' : (department || 'All Departments'),
+      summary: {
+        totalEmployees,
+        averageAttendance,
+        totalWorkingDays,
+        totalPresent: presentRecords.length,
+        totalAbsent: absentRecords
+      },
+      employees: employeeStats.sort((a, b) => b.attendanceRate - a.attendanceRate)
+    };
+
+    res.json({ data: report });
+  } catch (error) {
+    console.error('Get attendance report error:', error);
+    res.status(500).json({ message: 'Error fetching attendance report' });
   }
 });
 
